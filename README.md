@@ -76,7 +76,7 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 | **Inventory Service** | Stock management, stock verification | PostgreSQL | 8003 | Python | ✅ Complete |
 | **Notification Service** | Email notifications via Kafka events | Redis (idempotency) | 8004 | Python | ✅ Complete |
 | **AI Service** | Recommendations, chatbot, smart search | None (stateless) | 8005 | Python | ✅ Complete |
-| **Search Service** | Full-text search, autocomplete, filters | Elasticsearch | 8006 | Java | 🔲 Planned |
+| **Search Service** | Full-text search, autocomplete, filters | Elasticsearch | 8006 | Java | ✅ Complete |
 
 ---
 
@@ -97,7 +97,7 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 | **AI/LLM** | Groq (Llama 3.3 70B) — provider-agnostic, supports Gemini & Ollama |
 | **Authentication** | Keycloak 24.0 (OAuth2 / JWT) + PyJWT |
 | **Rate Limiting** | slowapi |
-| **Resilience** | tenacity (retry), pybreaker (circuit breaker) |
+| **Resilience** | tenacity (retry), custom async circuit breaker |
 | **Observability** | Prometheus, Grafana, Loki, Tempo |
 | **Containerization** | Docker, Docker Compose |
 | **Testing** | pytest, pytest-asyncio, unittest.mock, JUnit 5, Mockito |
@@ -188,7 +188,7 @@ Python-Microservices/
 │   ├── Dockerfile
 │   └── requirements.txt
 │
-├── ai-service/                           # Python — FastAPI + Kafka + LLM
+├── ai-service/                           # Python — FastAPI + Kafka + LLM + Redis cache
 │   ├── app/
 │   │   ├── main.py
 │   │   ├── config.py
@@ -197,9 +197,11 @@ Python-Microservices/
 │   │   │   ├── gemini_client.py          # Google Gemini
 │   │   │   ├── groq_client.py            # Groq / Llama 3.3 70B
 │   │   │   ├── ollama_client.py          # Ollama (local)
-│   │   │   └── factory.py               # Provider factory
+│   │   │   └── factory.py                # Provider factory
 │   │   ├── clients/
 │   │   │   └── product_client.py         # Fetches real catalog for LLM context
+│   │   ├── cache/
+│   │   │   └── redis_cache.py            # Cache-aside Redis layer (DB 1)
 │   │   ├── routes/
 │   │   │   └── ai_routes.py
 │   │   ├── services/
@@ -225,6 +227,8 @@ Python-Microservices/
 │   │       ├── service/
 │   │       └── kafka/
 │   ├── src/test/java/
+│   │   └── com/ecommerce/search/service/
+│   │       └── SearchServiceTest.java    # JUnit 5 + Mockito unit tests
 │   ├── Dockerfile
 │   └── pom.xml
 │
@@ -413,7 +417,7 @@ Index: products
 ### Search Service (Java)
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/search?q=` | Full-text product search |
+| `GET` | `/api/search?q=` | Full-text product search (fuzzy via `multi_match` + `AUTO` fuzziness) |
 | `GET` | `/api/search/autocomplete?q=` | Autocomplete suggestions |
 | `GET` | `/api/search/filter?category=&minPrice=&maxPrice=` | Faceted filtering |
 
@@ -462,14 +466,17 @@ LLM_PROVIDER=gemini    # Google Gemini
 LLM_PROVIDER=ollama    # Ollama (local, no API key)
 ```
 
+### Redis Caching (Cache-Aside)
+The AI Service caches LLM-returned product IDs (6h TTL) and catalog data (15min TTL) in Redis DB 1 to reduce LLM calls and Product Service load. Live product details (prices, inventory) are always fetched fresh. Chat responses are not cached since conversation history makes full-response caching unsafe.
+
 ---
 
 ## 🔍 Search Features (Java Spring Boot)
 
 | Feature | Endpoint | Description |
 |---|---|---|
-| Full-text search | `GET /api/search?q=` | Fuzzy matching, relevance scoring |
-| Autocomplete | `GET /api/search/autocomplete?q=` | Type-ahead suggestions |
+| Full-text search | `GET /api/search?q=` | `multi_match` across name/description/tags/category with `AUTO` fuzziness and `name^3` boost |
+| Autocomplete | `GET /api/search/autocomplete?q=` | Prefix-based type-ahead suggestions |
 | Faceted filters | `GET /api/search/filter?category=&minPrice=&maxPrice=` | Filter by category, price range |
 
 ### How Search Stays in Sync
@@ -503,10 +510,11 @@ Products are the source of truth in MongoDB. Elasticsearch is a read-optimized c
 |---|---|---|---|
 | **Outbox Pattern** | PostgreSQL | Order Service → Kafka | Events survive Kafka outages |
 | **Idempotency** | Redis `SET NX` | Notification Service | Prevents duplicate emails |
-| **Circuit Breaker** | pybreaker | Order → Inventory | Return "service unavailable" |
+| **Circuit Breaker** | Custom async (80 LOC) | Order → Inventory | Return "service unavailable" |
 | **Retry + Backoff** | tenacity | Order → Inventory, AI → LLM | Raise after max retries |
 | **Timeout** | httpx | All inter-service calls | Raise timeout exception |
 | **Rate Limiter** | slowapi | API Gateway | 429 Too Many Requests |
+| **Cache-Aside** | Redis | AI Service | Graceful fallback on Redis failure |
 
 ---
 
@@ -520,9 +528,9 @@ Products are the source of truth in MongoDB. Elasticsearch is a read-optimized c
 | Inventory Service | Python | `test_inventory_service.py` | 20 | CRUD, stock check, reduce, restock |
 | Notification Service | Python | `test_email_service.py`, `test_kafka_consumer.py` | 34 | Email templates, SMTP, Kafka routing |
 | AI Service | Python | `test_llm_clients.py`, `test_ai_services.py`, `test_product_client.py`, `test_kafka.py` | 44 | All 3 LLM providers, all 4 AI features |
-| Search Service | Java | JUnit 5 + Mockito | 🔲 | Planned |
+| Search Service | Java | `SearchServiceTest.java` | 15 | Full-text search, fuzzy match, autocomplete, faceted filter, indexing |
 
-**Total: 143+ unit tests across all services**
+**Total: 158+ unit tests across all services**
 
 ### Running Tests
 ```bash
@@ -533,7 +541,7 @@ pytest -v
 
 # Java service
 cd search-service
-./mvnw test
+mvn test
 ```
 
 ---
@@ -545,7 +553,7 @@ cd search-service
 | MongoDB | 27017 | Product Service database |
 | PostgreSQL | 5433 | Order + Inventory databases |
 | Elasticsearch | 9200 | Search Service — full-text search |
-| Redis | 6379 | Notification Service — idempotency + caching |
+| Redis | 6379 | Notification Service (DB 0) + AI Service cache (DB 1) |
 | Kafka | 9092 | Event streaming |
 | Zookeeper | 2181 | Kafka coordination |
 | Kafka UI | 8090 | Visual Kafka management |
@@ -608,7 +616,7 @@ python -m uvicorn app.main:app --port 8005 --loop asyncio
 
 # Terminal 6: Search Service (Java)
 cd search-service
-./mvnw spring-boot:run
+mvn spring-boot:run
 
 # Terminal 7: API Gateway (Python)
 cd api-gateway && source venv/bin/activate
@@ -644,11 +652,15 @@ curl -X POST http://localhost:9000/api/ai/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "What products do you have?"}'
 
-# Full-text search (Java service)
+# Full-text search (Java service) — fuzzy: "iphne" still matches iPhone
 curl "http://localhost:9000/api/search?q=iphone"
+curl "http://localhost:9000/api/search?q=iphne"
 
 # Autocomplete
 curl "http://localhost:9000/api/search/autocomplete?q=iph"
+
+# Faceted filter
+curl "http://localhost:9000/api/search/filter?category=Electronics&minPrice=500&maxPrice=1500"
 ```
 
 ---
@@ -681,6 +693,11 @@ curl "http://localhost:9000/api/search/autocomplete?q=iph"
 | Gemini daily rate limit exhausted | Kafka burst + retry cascading | Switched to Groq, added throttling |
 | Product Service response format mismatch | Returns dict not list | Handle both formats in client |
 | Pydantic rejecting extra `.env` fields | Fields not declared in Settings | Added all fields to config.py |
+| `pybreaker` incompatible with Python 3.12 | Tornado dependency broke | Replaced with custom 80-line async circuit breaker |
+| Lombok failing on Java 21 + Maven | Annotation processing issues | Removed Lombok, used explicit getters/setters/builders |
+| Local Homebrew Redis conflicting with Docker Redis | Both bound to 6379 | `brew services stop redis` before `docker-compose up` |
+| Spring Data ES `Criteria.matches()` not fuzzy | API doesn't expose fuzziness directly | Switched to `StringQuery` with raw `multi_match` + `AUTO` fuzziness |
+| Mockito failing on Java 25 Byte Buddy | Byte Buddy only supports up to Java 23 | Pinned project to Java 21 in `pom.xml` |
 
 ---
 
@@ -699,23 +716,24 @@ Phase 3 ✅ Async Layer
   └── Notification Service (Python, Kafka consumer, Gmail SMTP)
 
 Phase 4 ✅ AI Layer
-  └── AI Service (Python, Groq/Llama 3.3 70B, provider-agnostic, Kafka)
+  └── AI Service (Python, Groq/Llama 3.3 70B, provider-agnostic, Kafka, Redis caching)
 
 Phase 5 ✅ Gateway & Security
   └── API Gateway (Python, routing, JWT via Keycloak, rate limiting)
 
-Phase 6 🔲 Resilience & Reliability
+Phase 6 ✅ Resilience & Reliability
   ├── Outbox Pattern in Order Service (PostgreSQL — guaranteed Kafka delivery)
   ├── Idempotency in Notification Service (Redis SET NX)
-  ├── Circuit Breaker on Order → Inventory (pybreaker)
+  ├── Custom async Circuit Breaker on Order → Inventory
   ├── Retry + Backoff on Order → Inventory, AI → LLM (tenacity)
   └── Timeouts on all HTTP calls (httpx)
 
-Phase 7 🔲 Search Service (Java Spring Boot)
+Phase 7 ✅ Search Service (Java Spring Boot)
   ├── Spring Boot 3.3 + Java 21
-  ├── Elasticsearch full-text search + autocomplete
+  ├── Elasticsearch full-text search (multi_match + AUTO fuzziness + name^3 boost)
+  ├── Autocomplete + faceted filtering
   ├── Kafka consumer (reindex on product-updated)
-  └── JUnit 5 + Mockito tests
+  └── JUnit 5 + Mockito tests (15 tests)
 
 Phase 8 🔲 Observability
   └── Prometheus, Grafana, Loki, Tempo wiring

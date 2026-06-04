@@ -230,7 +230,7 @@ services:
     networks:
       - microservices-net
       
-# ───────────────────────────────────────────
+  # ───────────────────────────────────────────
   # REDIS — Caching & Idempotency
   # ───────────────────────────────────────────
 
@@ -246,4 +246,26 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
+      retries: 5
+
+  # ───────────────────────────────────────────
+  # ELASTICSEARCH — Search Engine
+  # ───────────────────────────────────────────
+
+  elasticsearch:
+    image: elasticsearch:8.13.0
+    container_name: elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
       retries: 5
