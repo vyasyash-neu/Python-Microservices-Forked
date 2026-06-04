@@ -34,7 +34,7 @@ public class SearchService {
     public List<Product> search(String query) {
         log.info("🔍 Searching for: {}", query);
 
-        Criteria criteria = new Criteria("name").matches(query)
+        Criteria criteria = new Criteria("name").fuzzy(query)
                 .or(new Criteria("description").matches(query))
                 .or(new Criteria("tags").matches(query))
                 .or(new Criteria("category").matches(query));

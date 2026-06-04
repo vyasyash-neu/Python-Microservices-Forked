@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     ORDER_SERVICE_URL: str = "http://localhost:8002"
     INVENTORY_SERVICE_URL: str = "http://localhost:8003"
     AI_SERVICE_URL: str = "http://localhost:8005"
+    SEARCH_SERVICE_URL: str = "http://localhost:8006"
 
     # Keycloak
     KEYCLOAK_URL: str = "http://localhost:8081"

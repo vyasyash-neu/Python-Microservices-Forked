@@ -175,3 +175,14 @@ async def proxy_ai(request: Request, path: str, token: dict = Depends(verify_tok
 @limiter.limit(settings.RATE_LIMIT_AI)
 async def proxy_ai_root(request: Request, token: dict = Depends(verify_token)):
     return await _proxy_request(request, settings.AI_SERVICE_URL, "ai")
+
+# Search — standard rate limit
+@app.api_route("/api/search/{path:path}", methods=["GET"])
+@limiter.limit(settings.RATE_LIMIT_DEFAULT)
+async def proxy_search(request: Request, path: str, token: dict = Depends(verify_token)):
+    return await _proxy_request(request, settings.SEARCH_SERVICE_URL, f"search/{path}")
+
+@app.api_route("/api/search", methods=["GET"])
+@limiter.limit(settings.RATE_LIMIT_DEFAULT)
+async def proxy_search_root(request: Request, token: dict = Depends(verify_token)):
+    return await _proxy_request(request, settings.SEARCH_SERVICE_URL, "search")

@@ -1,5 +1,6 @@
 package com.ecommerce.search.service;
 
+import org.springframework.data.elasticsearch.core.query.Query;
 import com.ecommerce.search.model.Product;
 import com.ecommerce.search.repository.ProductSearchRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,9 +12,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHits;
-import org.springframework.data.elasticsearch.core.SearchHitsImpl;
-import org.springframework.data.elasticsearch.core.TotalHitsRelation;
-import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
+// import org.springframework.data.elasticsearch.core.SearchHitsImpl;
+// import org.springframework.data.elasticsearch.core.TotalHitsRelation;
+// import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
 
 import java.util.List;
 import java.util.Optional;
@@ -54,23 +55,16 @@ class SearchServiceTest {
 
     @SuppressWarnings("unchecked")
     private SearchHits<Product> mockSearchHits(List<Product> products) {
-        List<SearchHit<Product>> hits = products.stream()
-                .map(p -> new SearchHit<>(
-                        "products", p.getId(), null, Float.NaN, null, null, null, null, null, null, p
-                ))
+        SearchHits<Product> hits = mock(SearchHits.class);
+        List<SearchHit<Product>> hitList = products.stream()
+                .map(p -> {
+                    SearchHit<Product> hit = mock(SearchHit.class);
+                    when(hit.getContent()).thenReturn(p);
+                    return hit;
+                })
                 .toList();
-
-        return new SearchHitsImpl<>(
-                hits.size(),
-                TotalHitsRelation.EQUAL_TO,
-                Float.NaN,
-                null,
-                null,
-                hits,
-                null,
-                null,
-                null
-        );
+        when(hits.getSearchHits()).thenReturn(hitList);
+        return hits;
     }
 
     // ─── search ─────────────────────────────────────────────────────────────
@@ -78,7 +72,7 @@ class SearchServiceTest {
     @Test
     void search_returnsMatchingProducts() {
         SearchHits<Product> hits = mockSearchHits(List.of(sampleProduct));
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<Product> results = searchService.search("iPhone");
@@ -90,7 +84,7 @@ class SearchServiceTest {
     @Test
     void search_returnsEmptyListWhenNoMatch() {
         SearchHits<Product> hits = mockSearchHits(List.of());
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<Product> results = searchService.search("nonexistent");
@@ -108,7 +102,7 @@ class SearchServiceTest {
                 .build();
 
         SearchHits<Product> hits = mockSearchHits(List.of(sampleProduct, product2));
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<Product> results = searchService.search("iPhone");
@@ -121,7 +115,7 @@ class SearchServiceTest {
     @Test
     void autocomplete_returnsSuggestions() {
         SearchHits<Product> hits = mockSearchHits(List.of(sampleProduct));
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<String> suggestions = searchService.autocomplete("iPh");
@@ -133,7 +127,7 @@ class SearchServiceTest {
     @Test
     void autocomplete_returnsEmptyForNoMatch() {
         SearchHits<Product> hits = mockSearchHits(List.of());
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<String> suggestions = searchService.autocomplete("xyz");
@@ -150,7 +144,7 @@ class SearchServiceTest {
                 .build();
 
         SearchHits<Product> hits = mockSearchHits(List.of(sampleProduct, dup));
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<String> suggestions = searchService.autocomplete("iPh");
@@ -163,7 +157,7 @@ class SearchServiceTest {
     @Test
     void filter_byCategoryReturnsResults() {
         SearchHits<Product> hits = mockSearchHits(List.of(sampleProduct));
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<Product> results = searchService.filter("Electronics", null, null);
@@ -175,7 +169,7 @@ class SearchServiceTest {
     @Test
     void filter_byPriceRangeReturnsResults() {
         SearchHits<Product> hits = mockSearchHits(List.of(sampleProduct));
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<Product> results = searchService.filter(null, 500.0, 1500.0);
@@ -186,7 +180,7 @@ class SearchServiceTest {
     @Test
     void filter_byCategoryAndPriceReturnsResults() {
         SearchHits<Product> hits = mockSearchHits(List.of(sampleProduct));
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<Product> results = searchService.filter("Electronics", 500.0, 1500.0);
@@ -197,7 +191,7 @@ class SearchServiceTest {
     @Test
     void filter_noFiltersReturnsAll() {
         SearchHits<Product> hits = mockSearchHits(List.of(sampleProduct));
-        when(elasticsearchOperations.search(any(CriteriaQuery.class), eq(Product.class)))
+        when(elasticsearchOperations.search(any(Query.class), eq(Product.class)))
                 .thenReturn(hits);
 
         List<Product> results = searchService.filter(null, null, null);
