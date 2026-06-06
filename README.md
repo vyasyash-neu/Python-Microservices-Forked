@@ -71,12 +71,12 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 | Service | Responsibility | Database | Port | Language | Status |
 |---|---|---|---|---|---|
 | **API Gateway** | Routing, JWT auth, rate limiting | None | 9000 | Python | ✅ Complete |
-| **Product Service** | CRUD for product catalog | MongoDB | 8001 | Python | ✅ Complete |
+| **Product Service** | CRUD for product catalog, Kafka producer | MongoDB | 8001 | Python | ✅ Complete |
 | **Order Service** | Place & manage orders, Kafka producer | PostgreSQL + Outbox | 8002 | Python | ✅ Complete |
 | **Inventory Service** | Stock management, stock verification | PostgreSQL | 8003 | Python | ✅ Complete |
 | **Notification Service** | Email notifications via Kafka events | Redis (idempotency) | 8004 | Python | ✅ Complete |
 | **AI Service** | Recommendations, chatbot, smart search | None (stateless) | 8005 | Python | ✅ Complete |
-| **Search Service** | Full-text search, autocomplete, filters | Elasticsearch | 8006 | Java | ✅ Complete |
+| **Search Service** | Full-text search, autocomplete, filters, diff-and-reconcile | Elasticsearch | 8006 | Java | ✅ Complete |
 
 ---
 
@@ -93,11 +93,11 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 | **Message Broker** | Apache Kafka (Confluent 7.6.0) |
 | **ORM** | SQLAlchemy (async) for PostgreSQL, Motor (async) for MongoDB, Spring Data JPA, Spring Data Elasticsearch |
 | **Validation** | Pydantic v2, Jakarta Bean Validation |
-| **HTTP Client** | httpx (async), WebClient (Spring WebFlux) |
+| **HTTP Client** | httpx (async), RestTemplate (Spring) |
 | **AI/LLM** | Groq (Llama 3.3 70B) — provider-agnostic, supports Gemini & Ollama |
 | **Authentication** | Keycloak 24.0 (OAuth2 / JWT) + PyJWT |
 | **Rate Limiting** | slowapi |
-| **Resilience** | tenacity (retry), custom async circuit breaker |
+| **Resilience** | tenacity (retry), custom async circuit breaker, Spring `@Scheduled` (diff-and-reconcile) |
 | **Observability** | Prometheus, Grafana, Loki, Tempo |
 | **Containerization** | Docker, Docker Compose |
 | **Testing** | pytest, pytest-asyncio, unittest.mock, JUnit 5, Mockito |
@@ -121,7 +121,7 @@ Python-Microservices/
 │   ├── Dockerfile
 │   └── requirements.txt
 │
-├── product-service/                      # Python — FastAPI + MongoDB
+├── product-service/                      # Python — FastAPI + MongoDB + Kafka producer
 │   ├── app/
 │   │   ├── main.py
 │   │   ├── config.py
@@ -130,9 +130,13 @@ Python-Microservices/
 │   │   │   └── product.py
 │   │   ├── routes/
 │   │   │   └── product_routes.py
-│   │   └── services/
-│   │       └── product_service.py
+│   │   ├── services/
+│   │   │   └── product_service.py        # Publishes product-updated events
+│   │   └── kafka/
+│   │       └── producer.py               # aiokafka producer
 │   ├── tests/
+│   │   └── unit/
+│   │       └── test_product_service.py   # 22 tests incl. Kafka publish coverage
 │   ├── Dockerfile
 │   └── requirements.txt
 │
@@ -219,16 +223,22 @@ Python-Microservices/
 ├── search-service/                       # Java — Spring Boot + Elasticsearch
 │   ├── src/main/java/
 │   │   └── com/ecommerce/search/
-│   │       ├── SearchApplication.java
+│   │       ├── SearchApplication.java    # @EnableScheduling
 │   │       ├── config/
 │   │       ├── controller/
 │   │       ├── model/
 │   │       ├── repository/
 │   │       ├── service/
-│   │       └── kafka/
+│   │       ├── kafka/
+│   │       │   └── ProductEventConsumer.java   # Consumes product-updated events
+│   │       └── scheduler/
+│   │           └── DiffReconcileJob.java       # Diff-and-reconcile every 30 min
 │   ├── src/test/java/
-│   │   └── com/ecommerce/search/service/
-│   │       └── SearchServiceTest.java    # JUnit 5 + Mockito unit tests
+│   │   └── com/ecommerce/search/
+│   │       ├── service/
+│   │       │   └── SearchServiceTest.java      # 15 tests
+│   │       └── scheduler/
+│   │           └── DiffReconcileJobTest.java   # 10 tests
 │   ├── Dockerfile
 │   └── pom.xml
 │
@@ -258,19 +268,20 @@ Python-Microservices/
 
 ### Synchronous (REST/HTTP)
 ```
-API Gateway    → All Services (proxy)
-Order Service  → Inventory Service (stock check + reduce)
-AI Service     → Product Service (fetch catalog for LLM context)
+API Gateway     → All Services (proxy)
+Order Service   → Inventory Service (stock check + reduce)
+AI Service      → Product Service (fetch catalog for LLM context)
+Search Service  → Product Service (diff-and-reconcile job reads source of truth every 30 min)
 ```
 
 ### Asynchronous (Kafka)
 ```
-Order Service ──► [order-placed]          ──► Notification Service (confirmation email)
-Order Service ──► [order-placed]          ──► AI Service (personalize email)
-AI Service    ──► [ai-notification-ready] ──► Notification Service (personalized email)
-Order Service ──► [order-cancelled]       ──► Notification Service (cancellation email)
-Inventory Svc ──► [inventory-low]         ──► Notification Service (low stock alert)
-Product Svc   ──► [product-updated]       ──► Search Service (reindex in Elasticsearch)
+Order Service   ──► [order-placed]          ──► Notification Service (confirmation email)
+Order Service   ──► [order-placed]          ──► AI Service (personalize email)
+AI Service      ──► [ai-notification-ready] ──► Notification Service (personalized email)
+Order Service   ──► [order-cancelled]       ──► Notification Service (cancellation email)
+Inventory Svc   ──► [inventory-low]         ──► Notification Service (low stock alert)
+Product Svc     ──► [product-updated]       ──► Search Service (reindex in Elasticsearch)
 ```
 
 ### Asynchronous (Kafka + Outbox Pattern)
@@ -299,6 +310,29 @@ Order Service:
 | `inventory-low` | Inventory Service | Notification Service | Stock alert |
 | `ai-notification-ready` | AI Service | Notification Service | Personalized email ready |
 | `product-updated` | Product Service | Search Service | Reindex product in Elasticsearch |
+
+### `product-updated` Event Schema
+
+Product Service publishes events with this schema (matching Order Service style):
+
+```json
+{
+  "event_type": "PRODUCT_CREATED" | "PRODUCT_UPDATED" | "PRODUCT_DELETED",
+  "timestamp": "2026-06-06T16:55:28Z",
+  "product_id": "6a2451001d0dedd8bfa83d69",
+  "product": {
+    "id": "6a2451001d0dedd8bfa83d69",
+    "name": "Bose QC45",
+    "description": "Noise canceling headphones",
+    "price": 279.99,
+    "category": "Electronics",
+    "tags": ["audio", "bose"],
+    "stock_quantity": 15
+  }
+}
+```
+
+For `PRODUCT_DELETED` events, the `product` field is `null` and only `product_id` matters.
 
 ---
 
@@ -380,12 +414,12 @@ Index: products
 ### Product Service
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/products` | Create a new product |
+| `POST` | `/api/products` | Create a new product (publishes `PRODUCT_CREATED`) |
 | `GET` | `/api/products` | List all products |
 | `GET` | `/api/products/search?q=` | Search by name, category, or tags |
 | `GET` | `/api/products/{id}` | Get product by ID |
-| `PUT` | `/api/products/{id}` | Update product |
-| `DELETE` | `/api/products/{id}` | Delete product |
+| `PUT` | `/api/products/{id}` | Update product (publishes `PRODUCT_UPDATED`) |
+| `DELETE` | `/api/products/{id}` | Delete product (publishes `PRODUCT_DELETED`) |
 
 ### Order Service
 | Method | Endpoint | Description |
@@ -480,11 +514,33 @@ The AI Service caches LLM-returned product IDs (6h TTL) and catalog data (15min 
 | Faceted filters | `GET /api/search/filter?category=&minPrice=&maxPrice=` | Filter by category, price range |
 
 ### How Search Stays in Sync
-```
-Product Service (Python) → Kafka: product-updated → Search Service (Java) → Elasticsearch reindex
-```
 
-Products are the source of truth in MongoDB. Elasticsearch is a read-optimized copy that stays in sync via Kafka events. If Elasticsearch goes down, the Product Service still works — search is just temporarily unavailable.
+**MongoDB is the source of truth.** Elasticsearch is a derived, read-optimized index. Data flows one way: MongoDB → Elasticsearch. The Search Service never writes back to MongoDB.
+
+Two layers keep the index aligned:
+
+**Layer 1 — Event-driven via Kafka (low latency, normal path)**
+```
+Product Service → Kafka: product-updated → Search Service → Elasticsearch
+```
+Product Service publishes `PRODUCT_CREATED`, `PRODUCT_UPDATED`, and `PRODUCT_DELETED` events after each mutation. The Search Service consumer applies them to Elasticsearch within ~1 second. Fire-and-forget — Kafka failures never block product writes.
+
+**Layer 2 — Diff-and-reconcile job (safety net, every 30 min)**
+```
+Search Service reads both stores → computes diff → writes only to Elasticsearch
+```
+A scheduled job in the Search Service:
+1. Reads all products from MongoDB (paginated through Product Service API) — *what should exist*
+2. Reads all document IDs from Elasticsearch — *what currently exists*
+3. Computes the diff and issues writes **only to Elasticsearch**:
+   - Upserts everything from MongoDB (Mongo wins on every field)
+   - Deletes ES docs whose IDs are no longer in MongoDB (catches orphans)
+4. MongoDB is never modified by this job
+
+The job reads from both sides to compute the diff — but writes flow one way. This catches anything Kafka missed: events lost during a Search Service outage, ES corruption, manual ES tampering, or schema drift.
+
+**Why diff-and-reconcile over outbox?**
+Outbox guarantees Kafka write durability but doesn't help with ES corruption, missed events while Search was offline, or schema migrations. Diff-and-reconcile handles all three because it's a full convergent sync, not just a delivery guarantee. Kafka events keep the system responsive in the happy path; the reconcile job guarantees eventual correctness.
 
 ---
 
@@ -510,11 +566,13 @@ Products are the source of truth in MongoDB. Elasticsearch is a read-optimized c
 |---|---|---|---|
 | **Outbox Pattern** | PostgreSQL | Order Service → Kafka | Events survive Kafka outages |
 | **Idempotency** | Redis `SET NX` | Notification Service | Prevents duplicate emails |
+| **Diff-and-Reconcile Job** | Spring `@Scheduled` | Search Service → Elasticsearch (Mongo-authoritative) | Self-heals from Kafka outages, ES drift, schema changes |
 | **Circuit Breaker** | Custom async (80 LOC) | Order → Inventory | Return "service unavailable" |
 | **Retry + Backoff** | tenacity | Order → Inventory, AI → LLM | Raise after max retries |
 | **Timeout** | httpx | All inter-service calls | Raise timeout exception |
 | **Rate Limiter** | slowapi | API Gateway | 429 Too Many Requests |
 | **Cache-Aside** | Redis | AI Service | Graceful fallback on Redis failure |
+| **Fire-and-Forget Kafka** | aiokafka | Product Service producer | Reconcile job catches missed events |
 
 ---
 
@@ -523,14 +581,14 @@ Products are the source of truth in MongoDB. Elasticsearch is a read-optimized c
 | Service | Language | Test Files | Tests | What's Covered |
 |---|---|---|---|---|
 | API Gateway | Python | `test_gateway.py`, `test_auth.py` | 30 | Routing, proxying, error handling, JWT |
-| Product Service | Python | `test_product_service.py` | — | CRUD, search, validation |
+| Product Service | Python | `test_product_service.py` | 22 | CRUD, search, validation, Kafka event publishing |
 | Order Service | Python | `test_order_service.py` | 15 | Order creation, stock checks, cancellation, Kafka |
 | Inventory Service | Python | `test_inventory_service.py` | 20 | CRUD, stock check, reduce, restock |
 | Notification Service | Python | `test_email_service.py`, `test_kafka_consumer.py` | 34 | Email templates, SMTP, Kafka routing |
 | AI Service | Python | `test_llm_clients.py`, `test_ai_services.py`, `test_product_client.py`, `test_kafka.py` | 44 | All 3 LLM providers, all 4 AI features |
-| Search Service | Java | `SearchServiceTest.java` | 15 | Full-text search, fuzzy match, autocomplete, faceted filter, indexing |
+| Search Service | Java | `SearchServiceTest.java`, `DiffReconcileJobTest.java` | 25 | Full-text search, fuzzy match, autocomplete, faceted filter, indexing, diff-and-reconcile |
 
-**Total: 158+ unit tests across all services**
+**Total: 190+ unit tests across all services**
 
 ### Running Tests
 ```bash
@@ -633,6 +691,18 @@ curl -X POST http://localhost:9000/api/inventory \
   -H "Content-Type: application/json" \
   -d '{"product_id": "prod-001", "product_name": "iPhone 15 Pro", "quantity": 100}'
 
+# Create a product (publishes PRODUCT_CREATED to Kafka → indexed in Elasticsearch)
+curl -X POST http://localhost:9000/api/products \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "iPhone 15 Pro",
+    "description": "Latest Apple smartphone",
+    "price": 999.99,
+    "category": "Electronics",
+    "tags": ["smartphone", "apple", "5g"],
+    "stock_quantity": 100
+  }'
+
 # Place order (triggers full Kafka flow)
 curl -X POST http://localhost:9000/api/orders \
   -H "Content-Type: application/json" \
@@ -698,6 +768,10 @@ curl "http://localhost:9000/api/search/filter?category=Electronics&minPrice=500&
 | Local Homebrew Redis conflicting with Docker Redis | Both bound to 6379 | `brew services stop redis` before `docker-compose up` |
 | Spring Data ES `Criteria.matches()` not fuzzy | API doesn't expose fuzziness directly | Switched to `StringQuery` with raw `multi_match` + `AUTO` fuzziness |
 | Mockito failing on Java 25 Byte Buddy | Byte Buddy only supports up to Java 23 | Pinned project to Java 21 in `pom.xml` |
+| Search Service consumer indexed empty products | Consumer read fields from event root; Product Service publishes them nested under `product` | Consumer now unwraps `product` field; also handles `PRODUCT_DELETED` event type |
+| Reconcile job hit 422 on `page_size=10000` | Product Service caps `page_size` at 100 | Reconcile job paginates in batches of 100 |
+| `RestTemplateBuilder.connectTimeout()` not found | Method renamed in Spring Boot 3.4+ | Skipped builder-level timeouts for the reconcile job |
+| pytest couldn't import `app` from `tests/` | Missing `pythonpath` in pytest.ini | Added `pythonpath = .` to pytest.ini |
 
 ---
 
@@ -735,12 +809,32 @@ Phase 7 ✅ Search Service (Java Spring Boot)
   ├── Kafka consumer (reindex on product-updated)
   └── JUnit 5 + Mockito tests (15 tests)
 
+Phase 7.5 ✅ Product Service → Search Service Event Sync
+  ├── aiokafka producer in Product Service (publish on create/update/delete)
+  ├── Consumer fix in Search Service (unwrap nested product, handle PRODUCT_DELETED)
+  ├── Diff-and-reconcile job in Search Service (every 30 min, Mongo-authoritative)
+  ├── Hybrid pattern: Kafka for low-latency, reconcile job for convergent correctness
+  └── 15 new unit tests (5 Product Service Kafka, 10 DiffReconcileJob)
+
 Phase 8 🔲 Observability
   └── Prometheus, Grafana, Loki, Tempo wiring
 
 Phase 9 🔲 CI/CD
   └── GitHub Actions (lint → test → build → deploy)
 ```
+
+---
+
+## 💼 Resume-Worthy Highlights
+
+- **Polyglot microservices** — Python (FastAPI) + Java (Spring Boot) demonstrating language-per-service architecture
+- **Outbox pattern** for guaranteed Kafka delivery in Order Service (PostgreSQL transactional outbox + background worker)
+- **Hybrid sync pattern** for Product → Search: Kafka events for low-latency + a diff-and-reconcile job for convergent correctness, with MongoDB as the strict source of truth (chosen over outbox because reconcile also handles ES corruption and schema drift, which outbox cannot)
+- **Cache-aside Redis caching** in AI Service (DB 1) with 6h TTL for LLM responses, graceful fallback on Redis failure
+- **Idempotency via Redis SET NX** in Notification Service prevents duplicate emails
+- **Custom async circuit breaker** (~80 LOC) when pybreaker proved incompatible with Python 3.12
+- **Provider-agnostic LLM layer** supporting Groq, Gemini, and Ollama with a one-line config switch
+- **190+ unit tests** across 7 services using pytest, JUnit 5, and Mockito
 
 ---
 
