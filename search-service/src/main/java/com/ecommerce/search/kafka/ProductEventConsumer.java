@@ -29,27 +29,40 @@ public class ProductEventConsumer {
     public void handleProductUpdated(String message) {
         try {
             log.info("📡 Received product-updated event");
-            JsonNode node = objectMapper.readTree(message);
+            JsonNode root = objectMapper.readTree(message);
 
-            String eventType = node.has("event_type") ? node.get("event_type").asText() : "UPDATED";
+            String eventType = root.has("event_type") ? root.get("event_type").asText() : "PRODUCT_UPDATED";
+            String productId = root.has("product_id") ? root.get("product_id").asText() : null;
 
-            if ("DELETED".equals(eventType)) {
-                String productId = node.get("product_id").asText();
-                searchService.deleteProduct(productId);
-                log.info("🗑️ Product deleted from index: {}", productId);
+            // Handle delete: payload has no product body
+            if ("PRODUCT_DELETED".equals(eventType) || "DELETED".equals(eventType)) {
+                if (productId != null) {
+                    searchService.deleteProduct(productId);
+                    log.info("🗑️ Product deleted from index: {}", productId);
+                }
                 return;
             }
+
+            // For CREATE/UPDATE: unwrap nested "product" object if present, else use root (back-compat)
+            JsonNode node = root.has("product") && !root.get("product").isNull()
+                    ? root.get("product")
+                    : root;
 
             Product product = Product.builder()
                     .id(getTextOrNull(node, "id", "_id"))
                     .name(getTextOrNull(node, "name"))
                     .description(getTextOrNull(node, "description"))
-                    .price(node.has("price") ? node.get("price").asDouble() : null)
+                    .price(node.has("price") && !node.get("price").isNull() ? node.get("price").asDouble() : null)
                     .category(getTextOrNull(node, "category"))
                     .tags(getStringList(node, "tags"))
                     .imageUrl(getTextOrNull(node, "image_url"))
-                    .stockQuantity(node.has("stock_quantity") ? node.get("stock_quantity").asInt() : null)
+                    .stockQuantity(node.has("stock_quantity") && !node.get("stock_quantity").isNull() ? node.get("stock_quantity").asInt() : null)
                     .build();
+
+            // If id wasn't in the nested product (it usually is), fall back to root-level product_id
+            if (product.getId() == null && productId != null) {
+                product.setId(productId);
+            }
 
             searchService.indexProduct(product);
 
@@ -57,7 +70,7 @@ public class ProductEventConsumer {
             log.error("❌ Failed to process product-updated event: {}", e.getMessage(), e);
         }
     }
-
+    
     private String getTextOrNull(JsonNode node, String... fieldNames) {
         for (String fieldName : fieldNames) {
             if (node.has(fieldName) && !node.get(fieldName).isNull()) {

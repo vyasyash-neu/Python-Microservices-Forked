@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+from app.kafka.producer import publish_event
+from app.config import settings
 from bson import ObjectId
 from bson.errors import InvalidId
 from datetime import datetime, timezone
@@ -5,6 +8,15 @@ from typing import List, Optional
 from fastapi import HTTPException, status
 from app.database import get_db
 from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse, ProductListResponse
+
+def _build_event(event_type: str, product_id: str, product: dict = None) -> dict:
+    """Build a product-updated Kafka event matching Order Service style."""
+    return {
+        "event_type": event_type,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "product_id": product_id,
+        "product": product,  # None for deletes
+    }
 
 def _serialize(doc: dict) -> ProductResponse:
     """Convert MongoDB document to ProductResponse."""
@@ -21,7 +33,14 @@ async def create_product(data: ProductCreate) -> ProductResponse:
     }
     result = await db.products.insert_one(doc)
     doc["_id"] = result.inserted_id
-    return _serialize(doc)
+    product = _serialize(doc)
+
+    # Publish event — fire and forget
+    await publish_event(
+        settings.KAFKA_PRODUCT_TOPIC,
+        _build_event("PRODUCT_CREATED", product.id, product.model_dump()),
+    )
+    return product
 
 async def get_product(product_id: str) -> ProductResponse:
     db = get_db()
@@ -76,9 +95,31 @@ async def update_product(product_id: str, data: ProductUpdate) -> ProductRespons
     )
     if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product {product_id} not found")
-    return _serialize(result)
+    product = _serialize(result)
+
+    await publish_event(
+        settings.KAFKA_PRODUCT_TOPIC,
+        _build_event("PRODUCT_UPDATED", product.id, product.model_dump()),
+    )
+    return product
+
 
 async def delete_product(product_id: str) -> dict:
+    db = get_db()
+    try:
+        oid = ObjectId(product_id)
+    except InvalidId:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid product ID")
+
+    result = await db.products.delete_one({"_id": oid})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product {product_id} not found")
+
+    await publish_event(
+        settings.KAFKA_PRODUCT_TOPIC,
+        _build_event("PRODUCT_DELETED", product_id, None),
+    )
+    return {"message": f"Product {product_id} deleted successfully"}
     db = get_db()
     try:
         oid = ObjectId(product_id)

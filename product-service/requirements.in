@@ -5,3 +5,4 @@ pymongo
 pydantic
 pydantic-settings
 python-multipart
+aiokafka
