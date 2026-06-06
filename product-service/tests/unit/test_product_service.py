@@ -41,11 +41,16 @@ def mock_db():
         mock.return_value = db
         yield db
 
+@pytest.fixture
+def mock_publish():
+    """Auto-mock the Kafka publish_event so mutation tests don't hit the broker."""
+    with patch("app.services.product_service.publish_event", new_callable=AsyncMock) as mock:
+        yield mock
 
 # ─── create_product ──────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_create_product_success(mock_db):
+async def test_create_product_success(mock_db, mock_publish):
     mock_db.products.insert_one = AsyncMock(
         return_value=MagicMock(inserted_id=MOCK_OID)
     )
@@ -56,7 +61,7 @@ async def test_create_product_success(mock_db):
     mock_db.products.insert_one.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_create_product_inserts_timestamps(mock_db):
+async def test_create_product_inserts_timestamps(mock_db, mock_publish):
     mock_db.products.insert_one = AsyncMock(
         return_value=MagicMock(inserted_id=MOCK_OID)
     )
@@ -163,7 +168,7 @@ async def test_search_products_returns_empty_list(mock_db):
 # ─── update_product ──────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_update_product_success(mock_db):
+async def test_update_product_success(mock_db, mock_publish):
     updated_doc = dict(MOCK_DOC)
     updated_doc["price"] = 899.99
     mock_db.products.find_one_and_update = AsyncMock(return_value=updated_doc)
@@ -194,7 +199,7 @@ async def test_update_product_invalid_id_raises_400(mock_db):
 # ─── delete_product ──────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_delete_product_success(mock_db):
+async def test_delete_product_success(mock_db, mock_publish):
     mock_db.products.delete_one = AsyncMock(
         return_value=MagicMock(deleted_count=1)
     )
@@ -215,3 +220,72 @@ async def test_delete_product_invalid_id_raises_400(mock_db):
     with pytest.raises(HTTPException) as exc:
         await delete_product("bad-id")
     assert exc.value.status_code == 400
+
+# ─── Kafka Event Publishing ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_product_publishes_kafka_event(mock_db, mock_publish):
+    mock_db.products.insert_one = AsyncMock(
+        return_value=MagicMock(inserted_id=MOCK_OID)
+    )
+    await create_product(SAMPLE_CREATE)
+
+    mock_publish.assert_called_once()
+    topic, payload = mock_publish.call_args[0]
+    assert topic == "product-updated"
+    assert payload["event_type"] == "PRODUCT_CREATED"
+    assert payload["product_id"] == str(MOCK_OID)
+    assert payload["product"]["name"] == "iPhone 15 Pro"
+    assert payload["product"]["price"] == 999.99
+    assert "timestamp" in payload
+
+
+@pytest.mark.asyncio
+async def test_update_product_publishes_kafka_event(mock_db, mock_publish):
+    updated_doc = dict(MOCK_DOC)
+    updated_doc["price"] = 899.99
+    mock_db.products.find_one_and_update = AsyncMock(return_value=updated_doc)
+
+    await update_product(str(MOCK_OID), ProductUpdate(price=899.99))
+
+    mock_publish.assert_called_once()
+    topic, payload = mock_publish.call_args[0]
+    assert topic == "product-updated"
+    assert payload["event_type"] == "PRODUCT_UPDATED"
+    assert payload["product_id"] == str(MOCK_OID)
+    assert payload["product"]["price"] == 899.99
+
+
+@pytest.mark.asyncio
+async def test_delete_product_publishes_kafka_event(mock_db, mock_publish):
+    mock_db.products.delete_one = AsyncMock(
+        return_value=MagicMock(deleted_count=1)
+    )
+    await delete_product(str(MOCK_OID))
+
+    mock_publish.assert_called_once()
+    topic, payload = mock_publish.call_args[0]
+    assert topic == "product-updated"
+    assert payload["event_type"] == "PRODUCT_DELETED"
+    assert payload["product_id"] == str(MOCK_OID)
+    assert payload["product"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_product_does_not_publish_on_not_found(mock_db, mock_publish):
+    mock_db.products.find_one_and_update = AsyncMock(return_value=None)
+    with pytest.raises(HTTPException):
+        await update_product(str(MOCK_OID), ProductUpdate(price=899.99))
+
+    mock_publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_product_does_not_publish_on_not_found(mock_db, mock_publish):
+    mock_db.products.delete_one = AsyncMock(
+        return_value=MagicMock(deleted_count=0)
+    )
+    with pytest.raises(HTTPException):
+        await delete_product(str(MOCK_OID))
+
+    mock_publish.assert_not_called()
