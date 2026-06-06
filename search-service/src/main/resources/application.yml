@@ -21,3 +21,17 @@ management:
     web:
       exposure:
         include: health, info
+
+# Product Service (source of truth for reconciliation)
+product:
+  service:
+    url: http://localhost:8001
+
+# Bidirectional reconciliation job — safety net for Kafka outages and ES drift
+reconciliation:
+  enabled: true
+  interval:
+    ms:  1800000 # DEFAULT 30 minutes (USE THIS VALUE FOR TESTING 30000)
+  initial:
+    delay:
+      ms: 60000  # DEFAULT 60 seconds after startup (USE THIS VALUE FOR TESTING 10000)

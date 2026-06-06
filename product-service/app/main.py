@@ -2,11 +2,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.database import connect_db, close_db
 from app.routes.product_routes import router as product_router
+from app.kafka.producer import start_producer, stop_producer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_db()
+    await start_producer()
     yield
+    await stop_producer()
     await close_db()
 
 app = FastAPI(title="Product Service", version="1.0.0", lifespan=lifespan)

@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     MONGO_HOST: str = "127.0.0.1"
     MONGO_PORT: int = 27017
     DB_NAME: str = "product_db"
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    KAFKA_PRODUCT_TOPIC: str = "product-updated"
 
     model_config = ConfigDict(env_file=".env")
 
