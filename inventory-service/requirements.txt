@@ -7,3 +7,4 @@ greenlet
 pydantic
 pydantic-settings
 python-multipart
+prometheus-fastapi-instrumentator #7.0.0

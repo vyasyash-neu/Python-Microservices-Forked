@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.database import connect_db, close_db
 from app.routes.product_routes import router as product_router
 from app.kafka.producer import start_producer, stop_producer
+from prometheus_fastapi_instrumentator import Instrumentator
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -13,6 +14,7 @@ async def lifespan(app: FastAPI):
     await close_db()
 
 app = FastAPI(title="Product Service", version="1.0.0", lifespan=lifespan)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 app.include_router(product_router, prefix="/api/products", tags=["Products"])
 

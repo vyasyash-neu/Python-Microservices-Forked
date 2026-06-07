@@ -3,6 +3,7 @@ uvicorn[standard]
 pydantic-settings
 httpx
 aiokafka
+prometheus-fastapi-instrumentator #7.0.0
 
 # Testing
 pytest

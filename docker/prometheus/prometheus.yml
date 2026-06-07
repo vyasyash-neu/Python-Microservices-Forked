@@ -8,30 +8,49 @@ global:
 scrape_configs:
   - job_name: "api-gateway"
     static_configs:
-      - targets: ["api-gateway:9000"]
+      - targets: ["host.docker.internal:9000"]
+        labels:
+          service: api-gateway
     metrics_path: /metrics
 
   - job_name: "product-service"
     static_configs:
-      - targets: ["product-service:8001"]
+      - targets: ["host.docker.internal:8001"]
+        labels:
+          service: product-service
     metrics_path: /metrics
 
   - job_name: "order-service"
     static_configs:
-      - targets: ["order-service:8002"]
+      - targets: ["host.docker.internal:8002"]
+        labels:
+          service: order-service
     metrics_path: /metrics
 
   - job_name: "inventory-service"
     static_configs:
-      - targets: ["inventory-service:8003"]
+      - targets: ["host.docker.internal:8003"]
+        labels:
+          service: inventory-service
     metrics_path: /metrics
 
   - job_name: "notification-service"
     static_configs:
-      - targets: ["notification-service:8004"]
+      - targets: ["host.docker.internal:8004"]
+        labels:
+          service: notification-service
     metrics_path: /metrics
 
   - job_name: "ai-service"
     static_configs:
-      - targets: ["ai-service:8005"]
+      - targets: ["host.docker.internal:8005"]
+        labels:
+          service: ai-service
     metrics_path: /metrics
+
+  - job_name: "search-service"
+    static_configs:
+      - targets: ["host.docker.internal:8006"]
+        labels:
+          service: search-service
+    metrics_path: /actuator/prometheus

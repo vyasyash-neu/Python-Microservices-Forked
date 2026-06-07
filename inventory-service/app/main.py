@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.database import engine, Base
 from app.routes.inventory_routes import router as inventory_router
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -22,6 +23,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 app.include_router(inventory_router, prefix="/api/inventory", tags=["Inventory"])
 

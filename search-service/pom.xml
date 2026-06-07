@@ -60,6 +60,12 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+        
+        <!-- Prometheus Registry -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
 
         <!-- Testing -->
         <dependency>
