@@ -8,7 +8,7 @@ pydantic
 pydantic-settings
 python-multipart
 prometheus-fastapi-instrumentator #7.0.0
-python-json-loggerpython-json-logger==2.0.7
+python-json-logger==2.0.7
 opentelemetry-api==1.42.1
 opentelemetry-distro==0.63b1
 opentelemetry-exporter-otlp==1.42.1
@@ -25,3 +25,5 @@ opentelemetry-sdk==1.42.1
 opentelemetry-semantic-conventions==0.63b1
 opentelemetry-util-http==0.63b1
 httpx
+pytest
+pytest-asyncio

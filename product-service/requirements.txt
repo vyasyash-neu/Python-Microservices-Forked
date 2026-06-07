@@ -15,3 +15,5 @@ opentelemetry-sdk==1.42.1
 opentelemetry-semantic-conventions==0.63b1
 opentelemetry-util-http==0.63b1
 opentelemetry-instrumentation-aiokafka
+pytest
+pytest-asyncio
