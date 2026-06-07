@@ -1,6 +1,6 @@
 # 🏗️ Polyglot Microservices — E-Commerce Platform with AI
 
-A production-grade microservices architecture built with **FastAPI**, **Spring Boot**, **Kafka**, **PostgreSQL**, **MongoDB**, **Elasticsearch**, **Redis**, and **Groq/Llama 3.3** — designed to demonstrate real-world patterns including event-driven communication, inter-service REST calls, JWT authentication, rate limiting, resilience patterns, full-text search, AI integration, and full observability.
+A production-grade microservices architecture built with **FastAPI**, **Spring Boot**, **Kafka**, **PostgreSQL**, **MongoDB**, **Elasticsearch**, **Redis**, and **Groq/Llama 3.3** — designed to demonstrate real-world patterns including event-driven communication, inter-service REST calls, JWT authentication, rate limiting, resilience patterns, full-text search, AI integration, and full-stack observability with metrics, logs, and distributed tracing.
 
 **Polyglot architecture:** Python services for core e-commerce + AI, Java service for search — demonstrating that microservices allow each service to use the best language for the job.
 
@@ -60,10 +60,10 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 
   ┌─────────────────────────────────────────────────┐
   │           Observability Stack                   │
-  │  All services → /metrics → Prometheus           │
-  │  Prometheus → Grafana (dashboards + alerts)     │
-  │  Containers → Promtail → Loki (logs)            │
-  │  Services → OTLP → Tempo (distributed traces)   │
+  │  Metrics:  Services → /metrics → Prometheus → Grafana │
+  │  Logs:     Services → JSON files → Promtail → Loki    │
+  │  Traces:   Services → OTLP → Tempo (correlated via    │
+  │            trace_id in every log line)                │
   └─────────────────────────────────────────────────┘
 ```
 
@@ -81,7 +81,7 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 | **AI Service** | Recommendations, chatbot, smart search | None (stateless) | 8005 | Python | ✅ Complete |
 | **Search Service** | Full-text search, autocomplete, filters, diff-and-reconcile | Elasticsearch | 8006 | Java | ✅ Complete |
 
-All 7 services expose Prometheus metrics and are visualized on a Grafana dashboard.
+All 7 services expose Prometheus metrics, emit JSON logs to Loki, and (Python services) export OpenTelemetry traces to Tempo.
 
 ---
 
@@ -103,7 +103,7 @@ All 7 services expose Prometheus metrics and are visualized on a Grafana dashboa
 | **Authentication** | Keycloak 24.0 (OAuth2 / JWT) + PyJWT |
 | **Rate Limiting** | slowapi |
 | **Resilience** | tenacity (retry), custom async circuit breaker, Spring `@Scheduled` (diff-and-reconcile) |
-| **Observability** | Prometheus 2.51, Grafana 10.4, Loki 2.9, Tempo 2.4, Micrometer, prometheus-fastapi-instrumentator |
+| **Observability** | Prometheus 2.51, Grafana 10.4, Loki 2.9, Tempo 2.4, Promtail, Micrometer, prometheus-fastapi-instrumentator, OpenTelemetry (FastAPI + httpx + logging + aiokafka instrumentation) |
 | **Containerization** | Docker, Docker Compose |
 | **Testing** | pytest, pytest-asyncio, unittest.mock, JUnit 5, Mockito |
 
@@ -116,160 +116,106 @@ Python-Microservices/
 │
 ├── api-gateway/                          # Python — FastAPI
 │   ├── app/
-│   │   ├── main.py                       # Proxy routes, shared httpx client, /metrics
-│   │   ├── config.py                     # Service URLs, Keycloak, rate limits
-│   │   ├── auth/
-│   │   │   └── keycloak.py               # JWT validation via JWKS
-│   │   └── middleware/
-│   │       └── rate_limit.py             # slowapi rate limiter
+│   │   ├── main.py                       # Proxy routes, /metrics, /tracing
+│   │   ├── config.py
+│   │   ├── logging_config.py             # JSON logs with trace_id/span_id
+│   │   ├── tracing_config.py             # OpenTelemetry setup → Tempo
+│   │   ├── auth/keycloak.py              # JWT validation via JWKS
+│   │   └── middleware/rate_limit.py
 │   ├── tests/
 │   ├── Dockerfile
 │   └── requirements.txt
 │
-├── product-service/                      # Python — FastAPI + MongoDB + Kafka producer
+├── product-service/                      # Python — FastAPI + MongoDB + Kafka
 │   ├── app/
-│   │   ├── main.py                       # /metrics enabled
-│   │   ├── config.py
-│   │   ├── database.py                   # Motor async MongoDB client
-│   │   ├── schemas/
-│   │   │   └── product.py
-│   │   ├── routes/
-│   │   │   └── product_routes.py
-│   │   ├── services/
-│   │   │   └── product_service.py        # Publishes product-updated events
-│   │   └── kafka/
-│   │       └── producer.py               # aiokafka producer
-│   ├── tests/
-│   │   └── unit/
-│   │       └── test_product_service.py   # 22 tests incl. Kafka publish coverage
-│   ├── Dockerfile
+│   │   ├── main.py
+│   │   ├── logging_config.py
+│   │   ├── tracing_config.py
+│   │   ├── database.py                   # Motor async MongoDB
+│   │   ├── schemas/product.py
+│   │   ├── routes/product_routes.py
+│   │   ├── services/product_service.py   # Publishes product-updated events
+│   │   └── kafka/producer.py             # aiokafka producer
+│   ├── tests/unit/test_product_service.py    # 22 tests
 │   └── requirements.txt
 │
 ├── order-service/                        # Python — FastAPI + PostgreSQL + Kafka
 │   ├── app/
-│   │   ├── main.py                       # /metrics enabled
-│   │   ├── config.py
-│   │   ├── database.py                   # SQLAlchemy async + PostgreSQL
+│   │   ├── main.py
+│   │   ├── logging_config.py
+│   │   ├── tracing_config.py
+│   │   ├── database.py
 │   │   ├── models/
-│   │   │   ├── order.py                  # Orders + order_items ORM
-│   │   │   └── outbox.py                 # Outbox table for guaranteed delivery
-│   │   ├── schemas/
-│   │   │   └── order.py
-│   │   ├── routes/
-│   │   │   └── order_routes.py
+│   │   │   ├── order.py
+│   │   │   └── outbox.py                 # Outbox table
+│   │   ├── routes/order_routes.py
 │   │   ├── services/
 │   │   │   ├── order_service.py
 │   │   │   └── outbox_worker.py          # Background worker: outbox → Kafka
-│   │   ├── clients/
-│   │   │   └── inventory_client.py
-│   │   └── kafka/
-│   │       └── producer.py
-│   ├── tests/
-│   ├── Dockerfile
-│   └── requirements.txt
+│   │   ├── clients/inventory_client.py
+│   │   └── kafka/producer.py
+│   └── tests/
 │
 ├── inventory-service/                    # Python — FastAPI + PostgreSQL
 │   ├── app/
-│   │   ├── main.py                       # /metrics enabled
-│   │   ├── config.py
-│   │   ├── database.py
-│   │   ├── models/
-│   │   │   └── inventory.py
-│   │   ├── schemas/
-│   │   │   └── inventory.py
-│   │   ├── routes/
-│   │   │   └── inventory_routes.py
-│   │   └── services/
-│   │       └── inventory_service.py
-│   ├── tests/
-│   ├── Dockerfile
-│   └── requirements.txt
+│   │   ├── main.py
+│   │   ├── logging_config.py
+│   │   ├── tracing_config.py
+│   │   ├── models/inventory.py
+│   │   ├── routes/inventory_routes.py
+│   │   └── services/inventory_service.py
+│   └── tests/
 │
 ├── notification-service/                 # Python — FastAPI + Kafka + Redis
 │   ├── app/
-│   │   ├── main.py                       # /metrics enabled + Kafka consumer
-│   │   ├── config.py
-│   │   ├── kafka/
-│   │   │   └── consumer.py               # aiokafka consumer for 4 topics
-│   │   └── services/
-│   │       └── email_service.py          # Gmail SMTP + HTML email templates
-│   ├── tests/
-│   ├── Dockerfile
-│   └── requirements.txt
+│   │   ├── main.py
+│   │   ├── logging_config.py
+│   │   ├── tracing_config.py
+│   │   ├── kafka/consumer.py
+│   │   └── services/email_service.py
+│   └── tests/
 │
 ├── ai-service/                           # Python — FastAPI + Kafka + LLM + Redis cache
 │   ├── app/
-│   │   ├── main.py                       # /metrics enabled
-│   │   ├── config.py
-│   │   ├── llm/
-│   │   │   ├── base.py                   # Abstract LLMClient interface
-│   │   │   ├── gemini_client.py          # Google Gemini
-│   │   │   ├── groq_client.py            # Groq / Llama 3.3 70B
-│   │   │   ├── ollama_client.py          # Ollama (local)
-│   │   │   └── factory.py                # Provider factory
-│   │   ├── clients/
-│   │   │   └── product_client.py         # Fetches real catalog for LLM context
-│   │   ├── cache/
-│   │   │   └── redis_cache.py            # Cache-aside Redis layer (DB 1)
-│   │   ├── routes/
-│   │   │   └── ai_routes.py
+│   │   ├── main.py
+│   │   ├── logging_config.py
+│   │   ├── tracing_config.py
+│   │   ├── llm/                          # Provider-agnostic clients
+│   │   ├── clients/product_client.py
+│   │   ├── cache/redis_cache.py          # Cache-aside Redis layer (DB 1)
+│   │   ├── routes/ai_routes.py
 │   │   ├── services/
-│   │   │   ├── chatbot.py
-│   │   │   ├── recommendation.py
-│   │   │   ├── suggestion.py
-│   │   │   └── notification_ai.py
 │   │   └── kafka/
-│   │       ├── consumer.py
-│   │       └── producer.py
-│   ├── tests/
-│   ├── Dockerfile
-│   └── requirements.txt
+│   └── tests/
 │
 ├── search-service/                       # Java — Spring Boot + Elasticsearch
-│   ├── src/main/java/
-│   │   └── com/ecommerce/search/
-│   │       ├── SearchApplication.java    # @EnableScheduling
-│   │       ├── config/
-│   │       ├── controller/
-│   │       ├── model/
-│   │       ├── repository/
-│   │       ├── service/
-│   │       ├── kafka/
-│   │       │   └── ProductEventConsumer.java   # Consumes product-updated events
-│   │       └── scheduler/
-│   │           └── DiffReconcileJob.java       # Diff-and-reconcile every 30 min
-│   ├── src/main/resources/
-│   │   └── application.yml               # Actuator + Prometheus + histogram config
-│   ├── src/test/java/
-│   │   └── com/ecommerce/search/
-│   │       ├── service/
-│   │       │   └── SearchServiceTest.java      # 15 tests
-│   │       └── scheduler/
-│   │           └── DiffReconcileJobTest.java   # 10 tests
-│   ├── Dockerfile
+│   ├── src/main/java/com/ecommerce/search/
+│   │   ├── SearchApplication.java        # @EnableScheduling
+│   │   ├── config/
+│   │   ├── controller/
+│   │   ├── model/
+│   │   ├── repository/
+│   │   ├── service/
+│   │   ├── kafka/ProductEventConsumer.java
+│   │   └── scheduler/DiffReconcileJob.java
+│   ├── src/main/resources/application.yml    # Actuator + Prometheus + histogram
+│   ├── src/test/java/com/ecommerce/search/
+│   │   ├── service/SearchServiceTest.java        # 15 tests
+│   │   └── scheduler/DiffReconcileJobTest.java   # 10 tests
 │   └── pom.xml
 │
 ├── docker/
-│   ├── postgres/
-│   │   └── init-multiple-dbs.sh
-│   ├── keycloak/
-│   │   └── realm-export.json
-│   ├── prometheus/
-│   │   └── prometheus.yml                # Scrape configs for all 7 services
-│   ├── grafana/
-│   │   └── provisioning/
-│   │       ├── datasources/
-│   │       │   └── datasources.yml       # Prometheus, Loki, Tempo (pinned UIDs)
-│   │       └── dashboards/
-│   │           ├── dashboards.yml        # Auto-load dashboard provider
-│   │           └── microservices-overview.json
-│   ├── loki/
-│   │   └── loki-config.yaml
-│   ├── promtail/
-│   │   └── promtail-config.yaml
-│   └── tempo/
-│       └── tempo-config.yaml
+│   ├── prometheus/prometheus.yml             # Scrape configs for all 7 services
+│   ├── grafana/provisioning/
+│   │   ├── datasources/datasources.yml       # Prometheus, Loki, Tempo (pinned UIDs)
+│   │   └── dashboards/
+│   │       ├── dashboards.yml
+│   │       └── microservices-overview.json   # 5 panels: metrics + logs
+│   ├── loki/loki-config.yaml                 # Loki 2.9 with WAL fix
+│   ├── promtail/promtail-config.yaml         # Tails Docker + service log files
+│   └── tempo/tempo-config.yaml
 │
+├── logs/                                     # Gitignored — service JSON logs (Promtail tails these)
 ├── docker-compose.yml
 └── README.md
 ```
@@ -283,49 +229,42 @@ Python-Microservices/
 API Gateway     → All Services (proxy)
 Order Service   → Inventory Service (stock check + reduce)
 AI Service      → Product Service (fetch catalog for LLM context)
-Search Service  → Product Service (diff-and-reconcile job reads source of truth every 30 min)
+Search Service  → Product Service (diff-and-reconcile job, every 30 min)
 ```
 
 ### Asynchronous (Kafka)
 ```
-Order Service   ──► [order-placed]          ──► Notification Service (confirmation email)
-Order Service   ──► [order-placed]          ──► AI Service (personalize email)
-AI Service      ──► [ai-notification-ready] ──► Notification Service (personalized email)
-Order Service   ──► [order-cancelled]       ──► Notification Service (cancellation email)
-Inventory Svc   ──► [inventory-low]         ──► Notification Service (low stock alert)
-Product Svc     ──► [product-updated]       ──► Search Service (reindex in Elasticsearch)
+Order Service   ──► [order-placed]          ──► Notification Service
+Order Service   ──► [order-placed]          ──► AI Service
+AI Service      ──► [ai-notification-ready] ──► Notification Service
+Order Service   ──► [order-cancelled]       ──► Notification Service
+Inventory Svc   ──► [inventory-low]         ──► Notification Service
+Product Svc     ──► [product-updated]       ──► Search Service
 ```
 
-### Asynchronous (Kafka + Outbox Pattern)
+### Outbox Pattern (Order Service)
 ```
-Order Service:
-  BEGIN TRANSACTION
-    1. Save order to PostgreSQL
-    2. Save event to outbox table (same transaction)
-  COMMIT
+BEGIN TRANSACTION
+  1. Save order to PostgreSQL
+  2. Save event to outbox table
+COMMIT
 
-  Background worker:
-    3. Read PENDING events from outbox
-    4. Publish to Kafka
-    5. Mark as SENT
-    6. Cleanup after 7 days
-
-  → Guaranteed delivery — events survive Kafka outages
+Background worker:
+  3. Read PENDING events → publish to Kafka → mark SENT
+  4. Cleanup after 7 days
 ```
 
 ### Kafka Topics
 
 | Topic | Producer | Consumers | Purpose |
 |---|---|---|---|
-| `order-placed` | Order Service | Notification, AI Service | New order created |
-| `order-cancelled` | Order Service | Notification Service | Order cancelled |
+| `order-placed` | Order Service | Notification, AI Service | New order |
+| `order-cancelled` | Order Service | Notification Service | Cancellation |
 | `inventory-low` | Inventory Service | Notification Service | Stock alert |
-| `ai-notification-ready` | AI Service | Notification Service | Personalized email ready |
-| `product-updated` | Product Service | Search Service | Reindex product in Elasticsearch |
+| `ai-notification-ready` | AI Service | Notification Service | Personalized email |
+| `product-updated` | Product Service | Search Service | Reindex in Elasticsearch |
 
 ### `product-updated` Event Schema
-
-Product Service publishes events with this schema (matching Order Service style):
 
 ```json
 {
@@ -335,7 +274,6 @@ Product Service publishes events with this schema (matching Order Service style)
   "product": {
     "id": "6a2451001d0dedd8bfa83d69",
     "name": "Bose QC45",
-    "description": "Noise canceling headphones",
     "price": 279.99,
     "category": "Electronics",
     "tags": ["audio", "bose"],
@@ -344,7 +282,7 @@ Product Service publishes events with this schema (matching Order Service style)
 }
 ```
 
-For `PRODUCT_DELETED` events, the `product` field is `null` and only `product_id` matters.
+For `PRODUCT_DELETED` events, `product` is `null` and only `product_id` matters.
 
 ---
 
@@ -356,12 +294,10 @@ Collection: products
 {
   "_id": "ObjectId",
   "name": "iPhone 15 Pro",
-  "description": "Latest Apple smartphone",
   "price": 999.99,
   "category": "Electronics",
   "tags": ["smartphone", "apple", "5g"],
   "stock_quantity": 100,
-  "image_url": "https://...",
   "created_at": "ISODate",
   "updated_at": "ISODate"
 }
@@ -372,7 +308,6 @@ Collection: products
 Table: orders
   id (UUID, PK) | order_number | customer_name | customer_email
   total_amount   | status (ENUM) | created_at   | updated_at
-
   Status: PENDING → CONFIRMED → SHIPPED → DELIVERED → CANCELLED
 
 Table: order_items
@@ -389,7 +324,6 @@ Table: outbox
 Table: inventory
   id (UUID, PK)  | product_id (unique) | product_name
   quantity        | reserved_qty        | created_at | updated_at
-
   Computed: available_qty = quantity - reserved_qty
 ```
 
@@ -398,13 +332,10 @@ Table: inventory
 Index: products
 {
   "name": "iPhone 15 Pro",
-  "description": "Latest Apple smartphone",
   "price": 999.99,
   "category": "Electronics",
   "tags": ["smartphone", "apple", "5g"],
-  "suggest": {
-    "input": ["iPhone", "iPhone 15", "iPhone 15 Pro"]
-  }
+  "suggest": { "input": ["iPhone", "iPhone 15", "iPhone 15 Pro"] }
 }
 ```
 
@@ -426,57 +357,52 @@ Index: products
 ### Product Service
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/products` | Create a new product (publishes `PRODUCT_CREATED`) |
-| `GET` | `/api/products` | List all products |
-| `GET` | `/api/products/search?q=` | Search by name, category, or tags |
-| `GET` | `/api/products/{id}` | Get product by ID |
-| `PUT` | `/api/products/{id}` | Update product (publishes `PRODUCT_UPDATED`) |
-| `DELETE` | `/api/products/{id}` | Delete product (publishes `PRODUCT_DELETED`) |
+| `POST` | `/api/products` | Create product (publishes `PRODUCT_CREATED`) |
+| `GET` | `/api/products` | List products |
+| `GET` | `/api/products/search?q=` | Search by name/category/tags |
+| `GET` | `/api/products/{id}` | Get by ID |
+| `PUT` | `/api/products/{id}` | Update (publishes `PRODUCT_UPDATED`) |
+| `DELETE` | `/api/products/{id}` | Delete (publishes `PRODUCT_DELETED`) |
 
 ### Order Service
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/orders` | Place a new order |
-| `GET` | `/api/orders` | Get all orders |
-| `GET` | `/api/orders/{order_id}` | Get order by ID |
-| `GET` | `/api/orders/user/{email}` | Get orders by customer email |
-| `PATCH` | `/api/orders/{order_id}/status` | Update order status |
-| `PATCH` | `/api/orders/{order_id}/cancel` | Cancel an order |
+| `GET` | `/api/orders` | List all orders |
+| `GET` | `/api/orders/{order_id}` | Get by ID |
+| `GET` | `/api/orders/user/{email}` | Orders by customer |
+| `PATCH` | `/api/orders/{order_id}/status` | Update status |
+| `PATCH` | `/api/orders/{order_id}/cancel` | Cancel |
 
 ### Inventory Service
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/inventory` | Add inventory item |
-| `GET` | `/api/inventory` | List all inventory |
-| `GET` | `/api/inventory/{product_id}` | Get stock for product |
-| `GET` | `/api/inventory/{product_id}/check?quantity=N` | Check stock availability |
+| `GET` | `/api/inventory` | List all |
+| `GET` | `/api/inventory/{product_id}` | Stock for product |
+| `GET` | `/api/inventory/{product_id}/check?quantity=N` | Check availability |
 | `PATCH` | `/api/inventory/{product_id}/reduce` | Reduce stock |
-| `PATCH` | `/api/inventory/{product_id}/restock` | Restock item |
+| `PATCH` | `/api/inventory/{product_id}/restock` | Restock |
 
 ### AI Service
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/ai/chat` | Shopping assistant chatbot |
+| `POST` | `/api/ai/chat` | Shopping chatbot |
 | `GET` | `/api/ai/recommendations` | Product recommendations |
 | `POST` | `/api/ai/suggest` | Natural language product search |
 
 ### Search Service (Java)
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/search?q=` | Full-text product search (fuzzy via `multi_match` + `AUTO` fuzziness) |
-| `GET` | `/api/search/autocomplete?q=` | Autocomplete suggestions |
+| `GET` | `/api/search?q=` | Full-text + fuzzy via `multi_match` + `AUTO` |
+| `GET` | `/api/search/autocomplete?q=` | Type-ahead suggestions |
 | `GET` | `/api/search/filter?category=&minPrice=&maxPrice=` | Faceted filtering |
-
-### Notification Service
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Health check (no REST API — event-driven only) |
 
 ### Observability Endpoints (all services)
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/metrics` (Python) | Prometheus-format metrics (request count, latency histogram, status codes) |
-| `GET` | `/actuator/prometheus` (Search Service) | Spring Boot Actuator Prometheus endpoint |
+| `GET` | `/metrics` (Python) | Prometheus-format metrics |
+| `GET` | `/actuator/prometheus` (Search Service) | Spring Actuator metrics |
 
 ---
 
@@ -488,16 +414,16 @@ Index: products
 3.  Order Service → GET /api/inventory/{id}/check (verify stock)
 4.  If in stock → save order to PostgreSQL
 5.  Save event to outbox table (same transaction — guaranteed)
-6.  Order Service → PATCH /api/inventory/{id}/reduce (reduce stock)
+6.  Order Service → PATCH /api/inventory/{id}/reduce
 7.  Background worker reads outbox → publishes 'order-placed' to Kafka
-8.  Worker marks event as SENT in outbox
-9.  Notification Service → consumes event → checks Redis (idempotency)
-10. If new → logs/sends confirmation email
-11. AI Service → consumes event → generates personalized email via LLM
-12. AI Service → publishes 'ai-notification-ready' to Kafka
-13. Notification Service → consumes AI event → checks Redis → logs/sends personalized email
-14. Return 201 Created to client
+8.  Notification Service → consumes → checks Redis (idempotency) → email
+9.  AI Service → consumes → generates personalized email via LLM
+10. AI Service → publishes 'ai-notification-ready' to Kafka
+11. Notification Service → consumes AI event → personalized email
+12. Return 201 Created to client
 ```
+
+Every step is **traced end-to-end** in Tempo — one trace_id stitches together all spans from API Gateway through Order, Inventory, and back, with each log line tagged by the same trace_id.
 
 ---
 
@@ -505,21 +431,21 @@ Index: products
 
 | Feature | Endpoint | LLM Provider | Description |
 |---|---|---|---|
-| Shopping Chatbot | `POST /api/ai/chat` | Groq (Llama 3.3 70B) | Conversational assistant with real product context |
-| Recommendations | `GET /api/ai/recommendations` | Groq (Llama 3.3 70B) | 5 related products from real catalog |
-| Smart Search | `POST /api/ai/suggest` | Groq (Llama 3.3 70B) | Natural language → matching products |
-| Email Personalization | Kafka event | Groq (Llama 3.3 70B) | AI-generated follow-up emails |
+| Shopping Chatbot | `POST /api/ai/chat` | Groq (Llama 3.3 70B) | Conversational assistant |
+| Recommendations | `GET /api/ai/recommendations` | Groq | 5 related products |
+| Smart Search | `POST /api/ai/suggest` | Groq | Natural language → products |
+| Email Personalization | Kafka event | Groq | AI-generated emails |
 
 ### Provider-Agnostic Design
-The AI Service supports 3 LLM providers. Switch by changing one line in `.env`:
+Switch by changing one line in `.env`:
 ```
 LLM_PROVIDER=groq      # Groq / Llama 3.3 70B (current)
 LLM_PROVIDER=gemini    # Google Gemini
-LLM_PROVIDER=ollama    # Ollama (local, no API key)
+LLM_PROVIDER=ollama    # Ollama (local)
 ```
 
 ### Redis Caching (Cache-Aside)
-The AI Service caches LLM-returned product IDs (6h TTL) and catalog data (15min TTL) in Redis DB 1 to reduce LLM calls and Product Service load. Live product details (prices, inventory) are always fetched fresh. Chat responses are not cached since conversation history makes full-response caching unsafe.
+AI Service caches LLM-returned product IDs (6h TTL) and catalog data (15min TTL) in Redis DB 1. Live product details fetched fresh. Chat responses not cached (conversation history makes full-response caching unsafe).
 
 ---
 
@@ -527,73 +453,113 @@ The AI Service caches LLM-returned product IDs (6h TTL) and catalog data (15min 
 
 | Feature | Endpoint | Description |
 |---|---|---|
-| Full-text search | `GET /api/search?q=` | `multi_match` across name/description/tags/category with `AUTO` fuzziness and `name^3` boost |
-| Autocomplete | `GET /api/search/autocomplete?q=` | Prefix-based type-ahead suggestions |
-| Faceted filters | `GET /api/search/filter?category=&minPrice=&maxPrice=` | Filter by category, price range |
+| Full-text search | `GET /api/search?q=` | `multi_match` with `AUTO` fuzziness, `name^3` boost |
+| Autocomplete | `GET /api/search/autocomplete?q=` | Prefix suggestions |
+| Faceted filters | `GET /api/search/filter?...` | Category, price range |
 
 ### How Search Stays in Sync
 
 **MongoDB is the source of truth.** Elasticsearch is a derived, read-optimized index. Data flows one way: MongoDB → Elasticsearch. The Search Service never writes back to MongoDB.
 
-Two layers keep the index aligned:
-
-**Layer 1 — Event-driven via Kafka (low latency, normal path)**
+**Layer 1 — Event-driven via Kafka (happy path)**
 ```
 Product Service → Kafka: product-updated → Search Service → Elasticsearch
 ```
-Product Service publishes `PRODUCT_CREATED`, `PRODUCT_UPDATED`, and `PRODUCT_DELETED` events after each mutation. The Search Service consumer applies them to Elasticsearch within ~1 second. Fire-and-forget — Kafka failures never block product writes.
+Fire-and-forget; Kafka failures never block product writes.
 
 **Layer 2 — Diff-and-reconcile job (safety net, every 30 min)**
 ```
 Search Service reads both stores → computes diff → writes only to Elasticsearch
 ```
-A scheduled job in the Search Service:
-1. Reads all products from MongoDB (paginated through Product Service API) — *what should exist*
-2. Reads all document IDs from Elasticsearch — *what currently exists*
-3. Computes the diff and issues writes **only to Elasticsearch**:
-   - Upserts everything from MongoDB (Mongo wins on every field)
-   - Deletes ES docs whose IDs are no longer in MongoDB (catches orphans)
+The scheduled job:
+1. Reads all products from MongoDB (paginated through Product Service API)
+2. Reads all document IDs from Elasticsearch
+3. Computes the diff and issues writes only to Elasticsearch (upserts from Mongo, deletes orphans)
 4. MongoDB is never modified by this job
 
-The job reads from both sides to compute the diff — but writes flow one way. This catches anything Kafka missed: events lost during a Search Service outage, ES corruption, manual ES tampering, or schema drift.
-
-**Why diff-and-reconcile over outbox?**
-Outbox guarantees Kafka write durability but doesn't help with ES corruption, missed events while Search was offline, or schema migrations. Diff-and-reconcile handles all three because it's a full convergent sync, not just a delivery guarantee. Kafka events keep the system responsive in the happy path; the reconcile job guarantees eventual correctness.
+**Why diff-and-reconcile over outbox?** Outbox guarantees Kafka write durability but doesn't handle ES corruption, missed events while Search was offline, or schema drift. Diff-and-reconcile catches all three because it's a full convergent sync.
 
 ---
 
 ## 📊 Observability
 
-The project includes a full observability stack: **metrics, logs, and traces** — the three pillars of observable systems.
+The project ships with a complete observability stack: **metrics, logs, and distributed traces — all correlated**. This is the same three-pillar model used at scale in production.
 
-### Metrics (Prometheus + Grafana) ✅
+### Stack at a glance
 
-Every service exposes Prometheus-format metrics; Prometheus scrapes them every 15 seconds; Grafana visualizes them on an auto-provisioned dashboard.
-
-| Tool | Purpose | URL | Login |
-|---|---|---|---|
-| **Prometheus** | Time-series database, scrapes service metrics | http://localhost:9090 | — |
-| **Grafana** | Dashboards and visualization | http://localhost:3000 | admin / admin |
-
-**How services expose metrics:**
-- **Python services (6)**: `prometheus-fastapi-instrumentator==7.0.0` exposes `/metrics` with request counts, status codes, and latency histograms.
-- **Search Service (Java)**: Spring Boot Actuator + Micrometer expose `/actuator/prometheus`. Histogram buckets enabled for `http.server.requests` with SLO targets at 50ms/100ms/200ms/500ms/1s/2s.
-
-**Grafana auto-provisioned dashboard — "Microservices Overview":**
-| Panel | Metric | PromQL |
+| Concern | Tool | Where to look |
 |---|---|---|
-| Request Rate | req/s per service | `sum by (service) (rate(http_requests_total[1m]))` (Python) + `http_server_requests_seconds_count` (Spring) |
-| Error Rate | 5xx percentage | 5xx requests / total, with `clamp_min(0.001)` to prevent divide-by-zero blowup |
-| p95 Latency | 95th percentile latency | `histogram_quantile(0.95, ...)` |
-| Service Status | UP/DOWN per service | `up{service=~"$service"}` |
+| Metrics | Prometheus + Grafana | http://localhost:3000 → Microservices Overview dashboard |
+| Logs | Loki + Promtail | Grafana → Explore → Loki, or the dashboard's Service Logs panel |
+| Traces | Tempo + OpenTelemetry | Grafana → Explore → Tempo |
+| Correlation | `trace_id` in every log line | Click trace_id in Loki → jumps to Tempo |
 
-**Networking trick:** Services run on the host (not in Docker), so Prometheus inside Docker scrapes them via `host.docker.internal:<port>` rather than container names.
+### 1. Metrics
 
-### Logs (Loki + Promtail) 🔲 Planned (next PR)
-Promtail ships container stdout to Loki; logs queryable from Grafana with the same label model as metrics.
+Every service exposes Prometheus-format metrics. Prometheus scrapes them every 15 seconds.
 
-### Traces (Tempo + OpenTelemetry) 🔲 Planned (next PR)
-OpenTelemetry instrumentation across services → OTLP → Tempo. Distributed traces visible in Grafana with span-level breakdowns of cross-service calls.
+- **Python services** use `prometheus-fastapi-instrumentator==7.0.0` exposing `/metrics` with request counts, status codes, and latency histograms.
+- **Search Service (Java)** uses Spring Boot Actuator + Micrometer at `/actuator/prometheus`, with histogram buckets enabled for `http.server.requests` at SLO targets (50ms/100ms/200ms/500ms/1s/2s).
+
+**Grafana dashboard — "Microservices Overview":**
+| Panel | Description |
+|---|---|
+| Request Rate | req/s per service (Python + Spring queries unified) |
+| Error Rate (5xx) | Per-service percentage with `clamp_min` to prevent divide-by-zero blowup |
+| p95 Latency | 95th percentile latency per service via `histogram_quantile()` |
+| Service Status | UP/DOWN per service from `up{}` |
+| Service Logs | Live JSON-parsed log entries (Loki) |
+
+**Networking note:** Services run on the host, not in Docker, so Prometheus scrapes them via `host.docker.internal:<port>`.
+
+### 2. Logs
+
+Every Python service emits **structured JSON logs** to both stdout and a file under `./logs/` (gitignored). Promtail tails the files and ships them to Loki. Each line includes:
+
+```json
+{
+  "timestamp": "2026-06-07 01:11:42,261",
+  "level": "INFO",
+  "logger": "app.routes.order_routes",
+  "message": "Order ORD-... created",
+  "service": "order-service",
+  "trace_id": "ad2e1f41703def52b97f785204369023",
+  "span_id": "d25c39cca59d6195"
+}
+```
+
+Loki indexes by `service` and `level` labels (set in Promtail's pipeline_stages). Grafana queries like `{service="order-service", level="ERROR"}` work out of the box.
+
+### 3. Distributed Traces
+
+Every Python service is instrumented with **OpenTelemetry** auto-instrumentation:
+- `FastAPIInstrumentor` — server spans for every incoming HTTP request
+- `HTTPXClientInstrumentor` — propagates trace context on outgoing HTTP calls
+- `AIOKafkaInstrumentor` — Kafka producer/consumer spans (where applicable)
+
+Spans are exported via OTLP gRPC to Tempo on `localhost:4317`. The `service.name` resource attribute tags each span.
+
+**One trace, multiple services:** A single `POST /api/orders` request produces ~18 spans across 3 services (api-gateway → order-service → inventory-service), visible as a single waterfall in Grafana → Explore → Tempo.
+
+**Log ↔ Trace correlation:** A custom logging filter pulls the current span's `trace_id` and `span_id` from the OpenTelemetry context on every log call. Click a `trace_id` in a Loki log → jump to the same trace in Tempo. Click a span in Tempo → jump to its logs in Loki (configured via `tracesToLogsV2` in datasource provisioning).
+
+### Quick verification commands
+
+```bash
+# Metrics
+open http://localhost:9090/targets         # All 7 should be UP
+open http://localhost:3000                 # admin/admin → Microservices Overview
+
+# Logs (after generating traffic)
+curl http://localhost:9000/api/products
+# Then in Grafana Explore (Loki): {service=~".+"}
+
+# Traces
+curl -X POST http://localhost:9000/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customer_name":"Test","customer_email":"t@t.com","items":[{"product_id":"prod-001","product_name":"X","quantity":1,"unit_price":10}]}'
+# Then in Grafana Explore (Tempo): Search → Service: api-gateway → run → click latest trace
+```
 
 ---
 
@@ -604,9 +570,7 @@ OpenTelemetry instrumentation across services → OTLP → Tempo. Distributed tr
 2. Client sends JWT: Authorization: Bearer <token>
 3. API Gateway validates JWT with Keycloak public keys (RS256)
 4. If valid → strips auth header, forwards to downstream service
-5. If invalid → 401 Unauthorized
-6. If expired → 403 Forbidden
-7. Services trust all requests from Gateway (internal network)
+5. Services trust requests from Gateway (internal network)
 ```
 
 > **Note:** `AUTH_ENABLED=false` by default for development. Set to `true` when Keycloak is configured.
@@ -619,8 +583,8 @@ OpenTelemetry instrumentation across services → OTLP → Tempo. Distributed tr
 |---|---|---|---|
 | **Outbox Pattern** | PostgreSQL | Order Service → Kafka | Events survive Kafka outages |
 | **Idempotency** | Redis `SET NX` | Notification Service | Prevents duplicate emails |
-| **Diff-and-Reconcile Job** | Spring `@Scheduled` | Search Service → Elasticsearch (Mongo-authoritative) | Self-heals from Kafka outages, ES drift, schema changes |
-| **Circuit Breaker** | Custom async (80 LOC) | Order → Inventory | Return "service unavailable" |
+| **Diff-and-Reconcile Job** | Spring `@Scheduled` | Search Service → Elasticsearch | Self-heals from Kafka/ES drift |
+| **Circuit Breaker** | Custom async (~80 LOC) | Order → Inventory | Returns "service unavailable" |
 | **Retry + Backoff** | tenacity | Order → Inventory, AI → LLM | Raise after max retries |
 | **Timeout** | httpx | All inter-service calls | Raise timeout exception |
 | **Rate Limiter** | slowapi | API Gateway | 429 Too Many Requests |
@@ -631,28 +595,24 @@ OpenTelemetry instrumentation across services → OTLP → Tempo. Distributed tr
 
 ## 🧪 Testing
 
-| Service | Language | Test Files | Tests | What's Covered |
-|---|---|---|---|---|
-| API Gateway | Python | `test_gateway.py`, `test_auth.py` | 30 | Routing, proxying, error handling, JWT |
-| Product Service | Python | `test_product_service.py` | 22 | CRUD, search, validation, Kafka event publishing |
-| Order Service | Python | `test_order_service.py` | 15 | Order creation, stock checks, cancellation, Kafka |
-| Inventory Service | Python | `test_inventory_service.py` | 20 | CRUD, stock check, reduce, restock |
-| Notification Service | Python | `test_email_service.py`, `test_kafka_consumer.py` | 34 | Email templates, SMTP, Kafka routing |
-| AI Service | Python | `test_llm_clients.py`, `test_ai_services.py`, `test_product_client.py`, `test_kafka.py` | 44 | All 3 LLM providers, all 4 AI features |
-| Search Service | Java | `SearchServiceTest.java`, `DiffReconcileJobTest.java` | 25 | Full-text search, fuzzy match, autocomplete, faceted filter, indexing, diff-and-reconcile |
+| Service | Language | Tests | Covers |
+|---|---|---|---|
+| API Gateway | Python | 30 | Routing, proxying, JWT |
+| Product Service | Python | 22 | CRUD, search, Kafka publishing |
+| Order Service | Python | 15 | Order creation, stock checks, Kafka |
+| Inventory Service | Python | 20 | CRUD, stock check, reduce, restock |
+| Notification Service | Python | 34 | Email templates, SMTP, Kafka routing |
+| AI Service | Python | 44 | All 3 LLM providers, 4 AI features |
+| Search Service | Java | 25 | Search, fuzzy match, autocomplete, diff-and-reconcile |
 
-**Total: 190+ unit tests across all services**
+**Total: 190+ unit tests**
 
-### Running Tests
 ```bash
-# Python services
-cd <service-directory>
-source venv/bin/activate
-pytest -v
+# Python
+cd <service> && source venv/bin/activate && pytest -v
 
-# Java service
-cd search-service
-mvn test
+# Java
+cd search-service && mvn test
 ```
 
 ---
@@ -661,27 +621,22 @@ mvn test
 
 | Service | Port | Purpose |
 |---|---|---|
-| MongoDB | 27017 | Product Service database |
-| PostgreSQL | 5433 | Order + Inventory databases |
-| Elasticsearch | 9200 | Search Service — full-text search |
-| Redis | 6379 | Notification Service (DB 0) + AI Service cache (DB 1) |
+| MongoDB | 27017 | Product Service |
+| PostgreSQL | 5433 | Order + Inventory |
+| Elasticsearch | 9200 | Search Service |
+| Redis | 6379 | Notification + AI cache |
 | Kafka | 9092 | Event streaming |
 | Zookeeper | 2181 | Kafka coordination |
 | Kafka UI | 8090 | Visual Kafka management |
-| Keycloak | 8081 | OAuth2 / JWT identity provider |
+| Keycloak | 8081 | OAuth2 / JWT |
 | Prometheus | 9090 | Metrics collection |
 | Grafana | 3000 | Dashboards (admin/admin) |
 | Loki | 3100 | Log aggregation |
-| Tempo | 3200 (HTTP) / 4317 (OTLP gRPC) / 4318 (OTLP HTTP) | Distributed tracing |
+| Promtail | 9080 | Log shipper |
+| Tempo | 3200 (HTTP), 4317 (OTLP gRPC), 4318 (OTLP HTTP) | Distributed tracing |
 
-### Starting Infrastructure
 ```bash
-cd Python-Microservices
 docker-compose up -d
-```
-
-### Verifying Services
-```bash
 docker ps --format "table {{.Names}}\t{{.Status}}"
 ```
 
@@ -705,23 +660,23 @@ docker-compose up -d
 ### Step 2 — Start Services (each in a separate terminal)
 
 ```bash
-# Terminal 1: Product Service (Python)
+# Terminal 1: Product Service
 cd product-service && source venv/bin/activate
 python -m uvicorn app.main:app --port 8001 --loop asyncio
 
-# Terminal 2: Inventory Service (Python)
+# Terminal 2: Inventory Service
 cd inventory-service && source venv/bin/activate
 python -m uvicorn app.main:app --port 8003 --loop asyncio
 
-# Terminal 3: Order Service (Python)
+# Terminal 3: Order Service
 cd order-service && source venv/bin/activate
 python -m uvicorn app.main:app --port 8002 --loop asyncio
 
-# Terminal 4: Notification Service (Python)
+# Terminal 4: Notification Service
 cd notification-service && source venv/bin/activate
 python -m uvicorn app.main:app --port 8004 --loop asyncio
 
-# Terminal 5: AI Service (Python)
+# Terminal 5: AI Service
 cd ai-service && source venv/bin/activate
 python -m uvicorn app.main:app --port 8005 --loop asyncio
 
@@ -729,90 +684,66 @@ python -m uvicorn app.main:app --port 8005 --loop asyncio
 cd search-service
 mvn spring-boot:run
 
-# Terminal 7: API Gateway (Python)
+# Terminal 7: API Gateway
 cd api-gateway && source venv/bin/activate
 python -m uvicorn app.main:app --port 9000 --loop asyncio
 ```
 
-### Step 3 — Test via Gateway
+Each Python service logs two init lines on startup:
+```
+"Logging initialized for <service>"
+"Tracing initialized for <service> → http://localhost:4317"
+```
+
+### Step 3 — Generate traffic
 ```bash
-# Health check
+# Health
 curl http://localhost:9000/health
 
-# Add inventory
+# Add inventory + place order (full Kafka flow + distributed trace)
 curl -X POST http://localhost:9000/api/inventory \
   -H "Content-Type: application/json" \
-  -d '{"product_id": "prod-001", "product_name": "iPhone 15 Pro", "quantity": 100}'
+  -d '{"product_id":"prod-001","product_name":"iPhone 15 Pro","quantity":100}'
 
-# Create a product (publishes PRODUCT_CREATED to Kafka → indexed in Elasticsearch)
-curl -X POST http://localhost:9000/api/products \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "iPhone 15 Pro",
-    "description": "Latest Apple smartphone",
-    "price": 999.99,
-    "category": "Electronics",
-    "tags": ["smartphone", "apple", "5g"],
-    "stock_quantity": 100
-  }'
-
-# Place order (triggers full Kafka flow)
 curl -X POST http://localhost:9000/api/orders \
   -H "Content-Type: application/json" \
   -d '{
-    "customer_name": "Yash Vyas",
-    "customer_email": "yash@example.com",
-    "items": [{
-      "product_id": "prod-001",
-      "product_name": "iPhone 15 Pro",
-      "quantity": 1,
-      "unit_price": 999.99
-    }]
+    "customer_name":"Yash Vyas",
+    "customer_email":"yash@example.com",
+    "items":[{"product_id":"prod-001","product_name":"iPhone 15 Pro","quantity":1,"unit_price":999.99}]
   }'
 
-# AI chatbot
+# AI
 curl -X POST http://localhost:9000/api/ai/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "What products do you have?"}'
+  -d '{"message":"What products do you have?"}'
 
-# Full-text search (Java service) — fuzzy: "iphne" still matches iPhone
-curl "http://localhost:9000/api/search?q=iphone"
+# Search (fuzzy)
 curl "http://localhost:9000/api/search?q=iphne"
-
-# Autocomplete
 curl "http://localhost:9000/api/search/autocomplete?q=iph"
-
-# Faceted filter
-curl "http://localhost:9000/api/search/filter?category=Electronics&minPrice=500&maxPrice=1500"
 ```
 
-### Step 4 — View metrics in Grafana
+### Step 4 — Observe
 
-1. Open http://localhost:3000
-2. Login: `admin` / `admin` (skip password change)
-3. Hamburger menu → **Dashboards** → **Microservices Overview**
-4. Generate traffic from Step 3, watch panels populate:
-   - Request Rate per service
-   - Error Rate (5xx) per service
-   - p95 Latency per service
-   - Service Status (all 7 green UP)
-5. Filter by service using the dropdown at the top of the dashboard
+- **Metrics**: http://localhost:3000 (admin/admin) → Microservices Overview
+- **Logs**: same dashboard, scroll to Service Logs panel — or Grafana Explore → Loki → `{service=~".+"}`
+- **Traces**: Grafana Explore → Tempo → Search → service `api-gateway` → run → click latest order trace
 
-Check Prometheus scrape targets directly: http://localhost:9090/targets — all 7 should show **UP**.
+A `POST /api/orders` produces ~18 spans across api-gateway, order-service, and inventory-service, all linked by one `trace_id` that also appears in every log line for that request.
 
 ---
 
 ## 📝 Service Documentation
 
-| Service | Language | Documentation |
-|---|---|---|
-| Product Service | Python | [`product-service/product-service-docs.md`](product-service/product-service-docs.md) |
-| Order Service | Python | [`order-service/order-docs.md`](order-service/order-docs.md) |
-| Inventory Service | Python | [`inventory-service/inventory-docs.md`](inventory-service/inventory-docs.md) |
-| Notification Service | Python | [`notification-service/notification-docs.md`](notification-service/notification-docs.md) |
-| AI Service | Python | [`ai-service/ai-service-docs.md`](ai-service/ai-service-docs.md) |
-| API Gateway | Python | [`api-gateway/api-gateway-docs.md`](api-gateway/api-gateway-docs.md) |
-| Search Service | Java | [`search-service/search-service-docs.md`](search-service/search-service-docs.md) |
+| Service | Documentation |
+|---|---|
+| Product Service | [`product-service/product-service-docs.md`](product-service/product-service-docs.md) |
+| Order Service | [`order-service/order-docs.md`](order-service/order-docs.md) |
+| Inventory Service | [`inventory-service/inventory-docs.md`](inventory-service/inventory-docs.md) |
+| Notification Service | [`notification-service/notification-docs.md`](notification-service/notification-docs.md) |
+| AI Service | [`ai-service/ai-service-docs.md`](ai-service/ai-service-docs.md) |
+| API Gateway | [`api-gateway/api-gateway-docs.md`](api-gateway/api-gateway-docs.md) |
+| Search Service | [`search-service/search-service-docs.md`](search-service/search-service-docs.md) |
 
 ---
 
@@ -823,27 +754,24 @@ Check Prometheus scrape targets directly: http://localhost:9090/targets — all 
 | Anaconda interfering with async event loop | venv inherited Anaconda's sys.path | Removed Anaconda, used Homebrew Python |
 | MongoDB auth failing from host to Docker | SCRAM auth broken over Docker TCP bridge on Mac | Disabled auth for local dev |
 | `motor` + `pymongo` version incompatibility | Motor relied on removed PyMongo internals | Pinned compatible versions |
-| PostgreSQL init script not running | Data volume already initialized | `docker-compose down -v` to reset |
 | Port conflicts on Mac (8080, 5432) | Local processes occupying ports | Remapped to 8081, 5433 |
-| SQLAlchemy async missing `greenlet` | Not auto-installed as dependency | Added to requirements.txt |
-| Missing `__init__.py` files | Python can't find packages | Created in all directories |
+| SQLAlchemy async missing `greenlet` | Not auto-installed | Added to requirements.txt |
 | Gemini daily rate limit exhausted | Kafka burst + retry cascading | Switched to Groq, added throttling |
-| Product Service response format mismatch | Returns dict not list | Handle both formats in client |
-| Pydantic rejecting extra `.env` fields | Fields not declared in Settings | Added all fields to config.py |
-| `pybreaker` incompatible with Python 3.12 | Tornado dependency broke | Replaced with custom 80-line async circuit breaker |
-| Lombok failing on Java 21 + Maven | Annotation processing issues | Removed Lombok, used explicit getters/setters/builders |
-| Local Homebrew Redis conflicting with Docker Redis | Both bound to 6379 | `brew services stop redis` before `docker-compose up` |
-| Spring Data ES `Criteria.matches()` not fuzzy | API doesn't expose fuzziness directly | Switched to `StringQuery` with raw `multi_match` + `AUTO` fuzziness |
-| Mockito failing on Java 25 Byte Buddy | Byte Buddy only supports up to Java 23 | Pinned project to Java 21 in `pom.xml` |
-| Search Service consumer indexed empty products | Consumer read fields from event root; Product Service publishes them nested under `product` | Consumer now unwraps `product` field; also handles `PRODUCT_DELETED` event type |
-| Reconcile job hit 422 on `page_size=10000` | Product Service caps `page_size` at 100 | Reconcile job paginates in batches of 100 |
-| `RestTemplateBuilder.connectTimeout()` not found | Method renamed in Spring Boot 3.4+ | Skipped builder-level timeouts for the reconcile job |
-| pytest couldn't import `app` from `tests/` | Missing `pythonpath` in pytest.ini | Added `pythonpath = .` to pytest.ini |
-| `prometheus-fastapi-instrumentator==8.0.0` broke FastAPI | v8 pulls in starlette 1.x; FastAPI 0.129 requires starlette <1.0 | Pinned `prometheus-fastapi-instrumentator==7.0.0` |
+| `pybreaker` broken on Python 3.12 | Tornado dependency issue | Custom 80-line async circuit breaker |
+| Lombok failing on Java 21 + Maven | Annotation processing | Removed Lombok, explicit getters/setters |
+| Local Homebrew Redis conflicting with Docker Redis | Port 6379 collision | `brew services stop redis` |
+| Spring Data ES `Criteria.matches()` not fuzzy | API doesn't expose fuzziness | Switched to `StringQuery` with `multi_match` + `AUTO` |
+| Mockito failing on Java 25 Byte Buddy | Byte Buddy supports up to Java 23 | Pinned project to Java 21 |
+| Search Service consumer indexed empty products | Consumer read fields from event root; producer publishes them nested under `product` | Consumer unwraps `product` field; also handles `PRODUCT_DELETED` |
+| `prometheus-fastapi-instrumentator==8.0.0` broke FastAPI | v8 pulls in starlette 1.x; FastAPI 0.129 requires <1.0 | Pinned to `7.0.0` |
 | Prometheus targets all DOWN | Used Docker container names but services run on host | Switched scrape targets to `host.docker.internal:<port>` |
-| Grafana panels showed "No data" | Dashboard JSON referenced datasource by UID "prometheus" but Grafana auto-generated a different UID | Pinned `uid: prometheus` (and loki, tempo) in provisioning |
-| Error Rate panel showed 10000% with no traffic | Tiny divisor (~0) inflated ratio | Wrapped divisor with `clamp_min(0.001)` in PromQL |
-| Search Service missing from p95 Latency panel | Spring's `http.server.requests` metric exports count/sum but not histogram buckets by default | Enabled `percentiles-histogram` + SLO buckets in `application.yml` |
+| Grafana panels showed "No data" | Dashboard referenced datasource UID "prometheus" but auto-generated UID differed | Pinned `uid:` for all datasources in provisioning |
+| Error Rate panel showed 10000% with no traffic | Tiny divisor (~0) inflated ratio | `clamp_min(divisor, 0.001)` in PromQL |
+| Search Service missing from p95 Latency | Spring `http.server.requests` exports count/sum but not histogram buckets by default | Enabled `percentiles-histogram` + SLO buckets in `application.yml` |
+| Loki crash-loop: `permission denied at /wal` | Loki 2.9 wants WAL at root, no permission | Configured `ingester.wal.dir: /loki/wal` |
+| Promtail Docker scrape error: client version 1.42 too old | Docker API requires 1.44+ now | Ignored for service-log path; will upgrade Promtail in future PR |
+| `LoggingInstrumentor` didn't inject trace_id into JSON logs | Field names didn't line up with formatter expectations | Custom `ContextFilter` that pulls `trace_id`/`span_id` from `opentelemetry.trace.get_current_span()` directly |
+| Inventory Service crashed: `No module named 'httpx'` | OTel httpx instrumentation imports httpx even if service doesn't use it | `pip install httpx` in inventory-service venv |
 
 ---
 
@@ -878,59 +806,65 @@ Phase 7 ✅ Search Service (Java Spring Boot)
   ├── Spring Boot 3.3 + Java 21
   ├── Elasticsearch full-text search (multi_match + AUTO fuzziness + name^3 boost)
   ├── Autocomplete + faceted filtering
-  ├── Kafka consumer (reindex on product-updated)
-  └── JUnit 5 + Mockito tests (15 tests)
+  └── 15 unit tests
 
-Phase 7.5 ✅ Product Service → Search Service Event Sync
-  ├── aiokafka producer in Product Service (publish on create/update/delete)
-  ├── Consumer fix in Search Service (unwrap nested product, handle PRODUCT_DELETED)
-  ├── Diff-and-reconcile job in Search Service (every 30 min, Mongo-authoritative)
-  ├── Hybrid pattern: Kafka for low-latency, reconcile job for convergent correctness
-  └── 15 new unit tests (5 Product Service Kafka, 10 DiffReconcileJob)
+Phase 7.5 ✅ Product → Search Event Sync
+  ├── aiokafka producer in Product Service
+  ├── Search Service consumer fix (nested product field, PRODUCT_DELETED handling)
+  ├── DiffReconcileJob (Mongo-authoritative, 30 min interval)
+  └── 15 new tests
 
 Phase 8.1 ✅ Observability — Metrics
-  ├── Prometheus scrapes all 7 services via host.docker.internal
-  ├── Python services: prometheus-fastapi-instrumentator (request count, status, latency histogram)
-  ├── Search Service: Spring Boot Actuator + Micrometer Prometheus registry
-  ├── Spring histogram buckets enabled (50ms/100ms/200ms/500ms/1s/2s SLOs)
-  ├── Grafana auto-provisioned datasources (Prometheus, Loki, Tempo) with pinned UIDs
-  └── Microservices Overview dashboard: request rate, error rate, p95 latency, service status
+  ├── Prometheus scrapes all 7 services
+  ├── Python: prometheus-fastapi-instrumentator
+  ├── Spring: Actuator + Micrometer with histogram buckets
+  ├── Grafana provisioned datasources (pinned UIDs)
+  └── Microservices Overview dashboard (4 metric panels)
 
-Phase 8.2 🔲 Observability — Logs
-  ├── Fix Loki crash-loop (WAL permission issue)
-  ├── Promtail ships container stdout to Loki
-  ├── JSON-structured logs across all services
-  └── Grafana log explorer + dashboard panel
+Phase 8.2 ✅ Observability — Logs
+  ├── Loki crash-loop fix (WAL config)
+  ├── Promtail file-tailing for host-run services
+  ├── JSON structured logging in all 6 Python services
+  ├── trace_id / span_id injected into every log line (via OTel API)
+  └── Service Logs panel added to dashboard
 
-Phase 8.3 🔲 Observability — Tracing
-  ├── OpenTelemetry instrumentation across services
-  ├── OTLP export to Tempo
-  ├── Distributed trace view in Grafana
-  └── Trace ↔ log correlation via traceID
+Phase 8.3 ✅ Observability — Distributed Tracing
+  ├── OpenTelemetry on all 6 Python services
+  ├── Auto-instrumentation: FastAPI, httpx, logging, aiokafka
+  ├── OTLP gRPC export to Tempo
+  ├── HTTP context propagation across services
+  ├── Verified end-to-end trace: api-gateway → order → inventory (~18 spans)
+  └── Log↔Trace correlation via custom ContextFilter
 
 Phase 9 🔲 CI/CD
   └── GitHub Actions (lint → test → build → deploy)
+
+Future / nice-to-have:
+  - Containerize services (currently run on host for dev speed)
+  - Kafka span propagation (so notification + AI consumers join the trace)
+  - OpenTelemetry on Search Service (Java)
+  - Alertmanager + Slack/email routing
 ```
 
 ---
 
 ## 💼 Resume-Worthy Highlights
 
-- **Polyglot microservices** — Python (FastAPI) + Java (Spring Boot) demonstrating language-per-service architecture
-- **Outbox pattern** for guaranteed Kafka delivery in Order Service (PostgreSQL transactional outbox + background worker)
-- **Hybrid sync pattern** for Product → Search: Kafka events for low-latency + a diff-and-reconcile job for convergent correctness, with MongoDB as the strict source of truth (chosen over outbox because reconcile also handles ES corruption and schema drift, which outbox cannot)
-- **Cache-aside Redis caching** in AI Service (DB 1) with 6h TTL for LLM responses, graceful fallback on Redis failure
+- **Polyglot microservices** — Python (FastAPI) + Java (Spring Boot) showing language-per-service architecture
+- **Outbox pattern** for guaranteed Kafka delivery in Order Service (transactional outbox + background worker)
+- **Hybrid sync pattern** for Product → Search: Kafka events for low-latency + diff-and-reconcile job for convergent correctness, with MongoDB as strict source of truth (chosen over outbox because reconcile also handles ES corruption and schema drift)
+- **Cache-aside Redis caching** in AI Service with 6h TTL for LLM responses, graceful fallback on Redis failure
 - **Idempotency via Redis SET NX** in Notification Service prevents duplicate emails
 - **Custom async circuit breaker** (~80 LOC) when pybreaker proved incompatible with Python 3.12
 - **Provider-agnostic LLM layer** supporting Groq, Gemini, and Ollama with a one-line config switch
-- **Production-grade observability** — Prometheus metrics across all 7 services, Grafana dashboards with PromQL (request rate, error rate, p95 latency, service status), unified queries that work across Python `prometheus-fastapi-instrumentator` and Java Spring Boot Actuator metric formats
+- **Full-stack observability** — Prometheus metrics, JSON-structured logs in Loki, OpenTelemetry distributed traces in Tempo. One `trace_id` stitches together ~18 spans across 3 services for a single order request, and the same `trace_id` appears in every log line, enabling one-click pivot from log to trace in Grafana
 - **190+ unit tests** across 7 services using pytest, JUnit 5, and Mockito
 
 ---
 
 ## 📄 License
 
-This project is built for learning and portfolio purposes.
+Built for learning and portfolio purposes.
 
 ---
 

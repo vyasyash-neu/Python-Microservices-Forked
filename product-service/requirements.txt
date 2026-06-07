@@ -1,14 +1,4 @@
-fastapi
-uvicorn[standard]
-pydantic-settings
-httpx
-aiokafka
-prometheus-fastapi-instrumentator #7.0.0
-python-json-logger
-
-# Testing
-pytest
-pytest-asynciopython-json-logger==2.0.7
+python-json-logger==2.0.7
 opentelemetry-api==1.42.1
 opentelemetry-distro==0.63b1
 opentelemetry-exporter-otlp==1.42.1

@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends, HTTPException
@@ -8,6 +10,10 @@ from app.config import settings
 from app.auth.keycloak import verify_token
 from app.middleware.rate_limit import limiter
 from prometheus_fastapi_instrumentator import Instrumentator
+from app.logging_config import setup_logging
+from app.tracing_config import setup_tracing
+
+setup_logging("api-gateway")
 
 # ─── Shared HTTP Client ──────────────────────────────────────────────────────
 
@@ -45,6 +51,7 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+setup_tracing("api-gateway", app)
 
 
 # ─── Service URL Mapping ─────────────────────────────────────────────────────
@@ -107,6 +114,7 @@ async def _proxy_request(request: Request, service_url: str, path: str) -> Respo
 
 @app.get("/health")
 async def health():
+    logging.info("Health check requested")
     return {
         "status": "UP",
         "service": settings.APP_NAME,
