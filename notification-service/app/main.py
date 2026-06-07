@@ -4,6 +4,10 @@ from fastapi import FastAPI
 from app.config import settings
 from app.kafka.consumer import start_consumer
 from prometheus_fastapi_instrumentator import Instrumentator
+from app.logging_config import setup_logging
+from app.tracing_config import setup_tracing
+
+setup_logging("notification-service")
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -31,6 +35,8 @@ app = FastAPI(
 )
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+setup_tracing("notification-service", app)
 
 @app.get("/health")
 async def health():

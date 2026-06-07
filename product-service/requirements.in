@@ -7,3 +7,4 @@ pydantic-settings
 python-multipart
 aiokafka
 prometheus-fastapi-instrumentator #7.0.0
+python-json-logger

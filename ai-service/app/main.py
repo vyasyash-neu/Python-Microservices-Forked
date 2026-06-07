@@ -5,7 +5,10 @@ from app.config import settings
 from app.routes.ai_routes import router as ai_router
 from app.kafka.consumer import start_consumer
 from prometheus_fastapi_instrumentator import Instrumentator
+from app.logging_config import setup_logging
+from app.tracing_config import setup_tracing
 
+setup_logging("ai-service")
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -33,6 +36,8 @@ app = FastAPI(
 )
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+setup_tracing("ai-service", app)
 
 app.include_router(ai_router, prefix="/api/ai", tags=["AI"])
 
