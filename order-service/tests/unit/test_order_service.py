@@ -1,3 +1,4 @@
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -82,7 +83,6 @@ SAMPLE_ORDER_MULTI = OrderCreate(
 @pytest.mark.asyncio
 async def test_create_order_success():
     db = make_mock_db()
-    mock_order = make_mock_order()
 
     async def mock_refresh(obj, attrs=None):
         if hasattr(obj, 'items'):
@@ -91,8 +91,7 @@ async def test_create_order_success():
     db.refresh = mock_refresh
 
     with patch("app.services.order_service.inventory_client.check_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.publish_order_placed", AsyncMock()):
+         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)):
         result = await create_order(SAMPLE_ORDER, db)
 
     db.add.assert_called()
@@ -109,8 +108,7 @@ async def test_create_order_calculates_total_correctly():
     db.refresh = mock_refresh
 
     with patch("app.services.order_service.inventory_client.check_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.publish_order_placed", AsyncMock()):
+         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)):
         result = await create_order(SAMPLE_ORDER, db)
 
     assert result.total_amount == 1999.98
@@ -128,8 +126,7 @@ async def test_create_order_multi_item_total():
     db.refresh = mock_refresh
 
     with patch("app.services.order_service.inventory_client.check_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.publish_order_placed", AsyncMock()):
+         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)):
         result = await create_order(SAMPLE_ORDER_MULTI, db)
 
     # 2 * 999.99 + 1 * 249.99 = 2249.97
@@ -157,8 +154,7 @@ async def test_create_order_checks_all_items():
     db.refresh = mock_refresh
 
     with patch("app.services.order_service.inventory_client.check_stock", check_mock), \
-         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.publish_order_placed", AsyncMock()):
+         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)):
         await create_order(SAMPLE_ORDER_MULTI, db)
 
     assert check_mock.call_count == 2
@@ -191,16 +187,19 @@ async def test_create_order_reduces_stock_for_all_items():
     db.refresh = mock_refresh
 
     with patch("app.services.order_service.inventory_client.check_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.inventory_client.reduce_stock", reduce_mock), \
-         patch("app.services.order_service.publish_order_placed", AsyncMock()):
+         patch("app.services.order_service.inventory_client.reduce_stock", reduce_mock):
         await create_order(SAMPLE_ORDER_MULTI, db)
 
     assert reduce_mock.call_count == 2
 
 @pytest.mark.asyncio
-async def test_create_order_publishes_kafka_event():
+async def test_create_order_saves_event_to_outbox():
+    """
+    Order Service uses the outbox pattern: instead of publishing directly to Kafka,
+    it saves an Outbox row in the same transaction. A background worker reads the
+    outbox and publishes asynchronously.
+    """
     db = make_mock_db()
-    kafka_mock = AsyncMock()
 
     async def mock_refresh(obj, attrs=None):
         if hasattr(obj, 'items'):
@@ -208,16 +207,24 @@ async def test_create_order_publishes_kafka_event():
     db.refresh = mock_refresh
 
     with patch("app.services.order_service.inventory_client.check_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.publish_order_placed", kafka_mock):
+         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)):
         await create_order(SAMPLE_ORDER, db)
 
-    kafka_mock.assert_called_once()
-    event = kafka_mock.call_args[0][0]
-    assert event["event_type"] == "ORDER_PLACED"
-    assert "order_number" in event
-    assert "customer_email" in event
-    assert "items" in event
+    # Among all the db.add() calls (Order, OrderItems, Outbox), find the Outbox one.
+    added_objects = [call.args[0] for call in db.add.call_args_list]
+    outbox_events = [
+        o for o in added_objects
+        if hasattr(o, "topic") and hasattr(o, "event_payload")
+    ]
+    assert len(outbox_events) == 1, "Exactly one outbox event should be saved for the order"
+
+    outbox = outbox_events[0]
+    payload = json.loads(outbox.event_payload)
+    assert payload["event_type"] == "ORDER_PLACED"
+    assert "order_number" in payload
+    assert "customer_email" in payload
+    assert "items" in payload
+    assert payload["customer_email"] == "yash@example.com"
 
 @pytest.mark.asyncio
 async def test_create_order_generates_unique_order_number():
@@ -232,8 +239,7 @@ async def test_create_order_generates_unique_order_number():
     db2.refresh = mock_refresh
 
     with patch("app.services.order_service.inventory_client.check_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.publish_order_placed", AsyncMock()):
+         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)):
         order1 = await create_order(SAMPLE_ORDER, db1)
         order2 = await create_order(SAMPLE_ORDER, db2)
 
@@ -251,8 +257,7 @@ async def test_create_order_status_is_confirmed():
     db.refresh = mock_refresh
 
     with patch("app.services.order_service.inventory_client.check_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)), \
-         patch("app.services.order_service.publish_order_placed", AsyncMock()):
+         patch("app.services.order_service.inventory_client.reduce_stock", AsyncMock(return_value=True)):
         result = await create_order(SAMPLE_ORDER, db)
 
     assert result.status == OrderStatus.CONFIRMED
