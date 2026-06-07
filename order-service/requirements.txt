@@ -10,3 +10,4 @@ python-multipart
 httpx
 aiokafka
 tenacity
+prometheus-fastapi-instrumentator #7.0.0

@@ -7,7 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.auth.keycloak import verify_token
 from app.middleware.rate_limit import limiter
-
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # ─── Shared HTTP Client ──────────────────────────────────────────────────────
 
@@ -44,6 +44,7 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 # ─── Service URL Mapping ─────────────────────────────────────────────────────

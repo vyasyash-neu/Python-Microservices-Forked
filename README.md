@@ -1,6 +1,6 @@
 # 🏗️ Polyglot Microservices — E-Commerce Platform with AI
 
-A production-grade microservices architecture built with **FastAPI**, **Spring Boot**, **Kafka**, **PostgreSQL**, **MongoDB**, **Elasticsearch**, **Redis**, and **Groq/Llama 3.3** — designed to demonstrate real-world patterns including event-driven communication, inter-service REST calls, JWT authentication, rate limiting, resilience patterns, full-text search, and AI integration.
+A production-grade microservices architecture built with **FastAPI**, **Spring Boot**, **Kafka**, **PostgreSQL**, **MongoDB**, **Elasticsearch**, **Redis**, and **Groq/Llama 3.3** — designed to demonstrate real-world patterns including event-driven communication, inter-service REST calls, JWT authentication, rate limiting, resilience patterns, full-text search, AI integration, and full observability.
 
 **Polyglot architecture:** Python services for core e-commerce + AI, Java service for search — demonstrating that microservices allow each service to use the best language for the job.
 
@@ -60,7 +60,10 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 
   ┌─────────────────────────────────────────────────┐
   │           Observability Stack                   │
-  │  Prometheus → Grafana │ Loki (logs) │ Tempo     │
+  │  All services → /metrics → Prometheus           │
+  │  Prometheus → Grafana (dashboards + alerts)     │
+  │  Containers → Promtail → Loki (logs)            │
+  │  Services → OTLP → Tempo (distributed traces)   │
   └─────────────────────────────────────────────────┘
 ```
 
@@ -77,6 +80,8 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 | **Notification Service** | Email notifications via Kafka events | Redis (idempotency) | 8004 | Python | ✅ Complete |
 | **AI Service** | Recommendations, chatbot, smart search | None (stateless) | 8005 | Python | ✅ Complete |
 | **Search Service** | Full-text search, autocomplete, filters, diff-and-reconcile | Elasticsearch | 8006 | Java | ✅ Complete |
+
+All 7 services expose Prometheus metrics and are visualized on a Grafana dashboard.
 
 ---
 
@@ -98,7 +103,7 @@ A production-grade microservices architecture built with **FastAPI**, **Spring B
 | **Authentication** | Keycloak 24.0 (OAuth2 / JWT) + PyJWT |
 | **Rate Limiting** | slowapi |
 | **Resilience** | tenacity (retry), custom async circuit breaker, Spring `@Scheduled` (diff-and-reconcile) |
-| **Observability** | Prometheus, Grafana, Loki, Tempo |
+| **Observability** | Prometheus 2.51, Grafana 10.4, Loki 2.9, Tempo 2.4, Micrometer, prometheus-fastapi-instrumentator |
 | **Containerization** | Docker, Docker Compose |
 | **Testing** | pytest, pytest-asyncio, unittest.mock, JUnit 5, Mockito |
 
@@ -111,7 +116,7 @@ Python-Microservices/
 │
 ├── api-gateway/                          # Python — FastAPI
 │   ├── app/
-│   │   ├── main.py                       # Proxy routes, shared httpx client
+│   │   ├── main.py                       # Proxy routes, shared httpx client, /metrics
 │   │   ├── config.py                     # Service URLs, Keycloak, rate limits
 │   │   ├── auth/
 │   │   │   └── keycloak.py               # JWT validation via JWKS
@@ -123,7 +128,7 @@ Python-Microservices/
 │
 ├── product-service/                      # Python — FastAPI + MongoDB + Kafka producer
 │   ├── app/
-│   │   ├── main.py
+│   │   ├── main.py                       # /metrics enabled
 │   │   ├── config.py
 │   │   ├── database.py                   # Motor async MongoDB client
 │   │   ├── schemas/
@@ -142,7 +147,7 @@ Python-Microservices/
 │
 ├── order-service/                        # Python — FastAPI + PostgreSQL + Kafka
 │   ├── app/
-│   │   ├── main.py
+│   │   ├── main.py                       # /metrics enabled
 │   │   ├── config.py
 │   │   ├── database.py                   # SQLAlchemy async + PostgreSQL
 │   │   ├── models/
@@ -165,7 +170,7 @@ Python-Microservices/
 │
 ├── inventory-service/                    # Python — FastAPI + PostgreSQL
 │   ├── app/
-│   │   ├── main.py
+│   │   ├── main.py                       # /metrics enabled
 │   │   ├── config.py
 │   │   ├── database.py
 │   │   ├── models/
@@ -182,7 +187,7 @@ Python-Microservices/
 │
 ├── notification-service/                 # Python — FastAPI + Kafka + Redis
 │   ├── app/
-│   │   ├── main.py                       # FastAPI + Kafka consumer background task
+│   │   ├── main.py                       # /metrics enabled + Kafka consumer
 │   │   ├── config.py
 │   │   ├── kafka/
 │   │   │   └── consumer.py               # aiokafka consumer for 4 topics
@@ -194,7 +199,7 @@ Python-Microservices/
 │
 ├── ai-service/                           # Python — FastAPI + Kafka + LLM + Redis cache
 │   ├── app/
-│   │   ├── main.py
+│   │   ├── main.py                       # /metrics enabled
 │   │   ├── config.py
 │   │   ├── llm/
 │   │   │   ├── base.py                   # Abstract LLMClient interface
@@ -233,6 +238,8 @@ Python-Microservices/
 │   │       │   └── ProductEventConsumer.java   # Consumes product-updated events
 │   │       └── scheduler/
 │   │           └── DiffReconcileJob.java       # Diff-and-reconcile every 30 min
+│   ├── src/main/resources/
+│   │   └── application.yml               # Actuator + Prometheus + histogram config
 │   ├── src/test/java/
 │   │   └── com/ecommerce/search/
 │   │       ├── service/
@@ -248,9 +255,14 @@ Python-Microservices/
 │   ├── keycloak/
 │   │   └── realm-export.json
 │   ├── prometheus/
-│   │   └── prometheus.yml
+│   │   └── prometheus.yml                # Scrape configs for all 7 services
 │   ├── grafana/
 │   │   └── provisioning/
+│   │       ├── datasources/
+│   │       │   └── datasources.yml       # Prometheus, Loki, Tempo (pinned UIDs)
+│   │       └── dashboards/
+│   │           ├── dashboards.yml        # Auto-load dashboard provider
+│   │           └── microservices-overview.json
 │   ├── loki/
 │   │   └── loki-config.yaml
 │   ├── promtail/
@@ -460,6 +472,12 @@ Index: products
 |---|---|---|
 | `GET` | `/health` | Health check (no REST API — event-driven only) |
 
+### Observability Endpoints (all services)
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/metrics` (Python) | Prometheus-format metrics (request count, latency histogram, status codes) |
+| `GET` | `/actuator/prometheus` (Search Service) | Spring Boot Actuator Prometheus endpoint |
+
 ---
 
 ## 🔄 End-to-End Order Flow
@@ -544,6 +562,41 @@ Outbox guarantees Kafka write durability but doesn't help with ES corruption, mi
 
 ---
 
+## 📊 Observability
+
+The project includes a full observability stack: **metrics, logs, and traces** — the three pillars of observable systems.
+
+### Metrics (Prometheus + Grafana) ✅
+
+Every service exposes Prometheus-format metrics; Prometheus scrapes them every 15 seconds; Grafana visualizes them on an auto-provisioned dashboard.
+
+| Tool | Purpose | URL | Login |
+|---|---|---|---|
+| **Prometheus** | Time-series database, scrapes service metrics | http://localhost:9090 | — |
+| **Grafana** | Dashboards and visualization | http://localhost:3000 | admin / admin |
+
+**How services expose metrics:**
+- **Python services (6)**: `prometheus-fastapi-instrumentator==7.0.0` exposes `/metrics` with request counts, status codes, and latency histograms.
+- **Search Service (Java)**: Spring Boot Actuator + Micrometer expose `/actuator/prometheus`. Histogram buckets enabled for `http.server.requests` with SLO targets at 50ms/100ms/200ms/500ms/1s/2s.
+
+**Grafana auto-provisioned dashboard — "Microservices Overview":**
+| Panel | Metric | PromQL |
+|---|---|---|
+| Request Rate | req/s per service | `sum by (service) (rate(http_requests_total[1m]))` (Python) + `http_server_requests_seconds_count` (Spring) |
+| Error Rate | 5xx percentage | 5xx requests / total, with `clamp_min(0.001)` to prevent divide-by-zero blowup |
+| p95 Latency | 95th percentile latency | `histogram_quantile(0.95, ...)` |
+| Service Status | UP/DOWN per service | `up{service=~"$service"}` |
+
+**Networking trick:** Services run on the host (not in Docker), so Prometheus inside Docker scrapes them via `host.docker.internal:<port>` rather than container names.
+
+### Logs (Loki + Promtail) 🔲 Planned (next PR)
+Promtail ships container stdout to Loki; logs queryable from Grafana with the same label model as metrics.
+
+### Traces (Tempo + OpenTelemetry) 🔲 Planned (next PR)
+OpenTelemetry instrumentation across services → OTLP → Tempo. Distributed traces visible in Grafana with span-level breakdowns of cross-service calls.
+
+---
+
 ## 🔐 Security
 
 ```
@@ -617,9 +670,9 @@ mvn test
 | Kafka UI | 8090 | Visual Kafka management |
 | Keycloak | 8081 | OAuth2 / JWT identity provider |
 | Prometheus | 9090 | Metrics collection |
-| Grafana | 3000 | Dashboards |
+| Grafana | 3000 | Dashboards (admin/admin) |
 | Loki | 3100 | Log aggregation |
-| Tempo | 3200 | Distributed tracing |
+| Tempo | 3200 (HTTP) / 4317 (OTLP gRPC) / 4318 (OTLP HTTP) | Distributed tracing |
 
 ### Starting Infrastructure
 ```bash
@@ -733,6 +786,20 @@ curl "http://localhost:9000/api/search/autocomplete?q=iph"
 curl "http://localhost:9000/api/search/filter?category=Electronics&minPrice=500&maxPrice=1500"
 ```
 
+### Step 4 — View metrics in Grafana
+
+1. Open http://localhost:3000
+2. Login: `admin` / `admin` (skip password change)
+3. Hamburger menu → **Dashboards** → **Microservices Overview**
+4. Generate traffic from Step 3, watch panels populate:
+   - Request Rate per service
+   - Error Rate (5xx) per service
+   - p95 Latency per service
+   - Service Status (all 7 green UP)
+5. Filter by service using the dropdown at the top of the dashboard
+
+Check Prometheus scrape targets directly: http://localhost:9090/targets — all 7 should show **UP**.
+
 ---
 
 ## 📝 Service Documentation
@@ -772,6 +839,11 @@ curl "http://localhost:9000/api/search/filter?category=Electronics&minPrice=500&
 | Reconcile job hit 422 on `page_size=10000` | Product Service caps `page_size` at 100 | Reconcile job paginates in batches of 100 |
 | `RestTemplateBuilder.connectTimeout()` not found | Method renamed in Spring Boot 3.4+ | Skipped builder-level timeouts for the reconcile job |
 | pytest couldn't import `app` from `tests/` | Missing `pythonpath` in pytest.ini | Added `pythonpath = .` to pytest.ini |
+| `prometheus-fastapi-instrumentator==8.0.0` broke FastAPI | v8 pulls in starlette 1.x; FastAPI 0.129 requires starlette <1.0 | Pinned `prometheus-fastapi-instrumentator==7.0.0` |
+| Prometheus targets all DOWN | Used Docker container names but services run on host | Switched scrape targets to `host.docker.internal:<port>` |
+| Grafana panels showed "No data" | Dashboard JSON referenced datasource by UID "prometheus" but Grafana auto-generated a different UID | Pinned `uid: prometheus` (and loki, tempo) in provisioning |
+| Error Rate panel showed 10000% with no traffic | Tiny divisor (~0) inflated ratio | Wrapped divisor with `clamp_min(0.001)` in PromQL |
+| Search Service missing from p95 Latency panel | Spring's `http.server.requests` metric exports count/sum but not histogram buckets by default | Enabled `percentiles-histogram` + SLO buckets in `application.yml` |
 
 ---
 
@@ -816,8 +888,25 @@ Phase 7.5 ✅ Product Service → Search Service Event Sync
   ├── Hybrid pattern: Kafka for low-latency, reconcile job for convergent correctness
   └── 15 new unit tests (5 Product Service Kafka, 10 DiffReconcileJob)
 
-Phase 8 🔲 Observability
-  └── Prometheus, Grafana, Loki, Tempo wiring
+Phase 8.1 ✅ Observability — Metrics
+  ├── Prometheus scrapes all 7 services via host.docker.internal
+  ├── Python services: prometheus-fastapi-instrumentator (request count, status, latency histogram)
+  ├── Search Service: Spring Boot Actuator + Micrometer Prometheus registry
+  ├── Spring histogram buckets enabled (50ms/100ms/200ms/500ms/1s/2s SLOs)
+  ├── Grafana auto-provisioned datasources (Prometheus, Loki, Tempo) with pinned UIDs
+  └── Microservices Overview dashboard: request rate, error rate, p95 latency, service status
+
+Phase 8.2 🔲 Observability — Logs
+  ├── Fix Loki crash-loop (WAL permission issue)
+  ├── Promtail ships container stdout to Loki
+  ├── JSON-structured logs across all services
+  └── Grafana log explorer + dashboard panel
+
+Phase 8.3 🔲 Observability — Tracing
+  ├── OpenTelemetry instrumentation across services
+  ├── OTLP export to Tempo
+  ├── Distributed trace view in Grafana
+  └── Trace ↔ log correlation via traceID
 
 Phase 9 🔲 CI/CD
   └── GitHub Actions (lint → test → build → deploy)
@@ -834,6 +923,7 @@ Phase 9 🔲 CI/CD
 - **Idempotency via Redis SET NX** in Notification Service prevents duplicate emails
 - **Custom async circuit breaker** (~80 LOC) when pybreaker proved incompatible with Python 3.12
 - **Provider-agnostic LLM layer** supporting Groq, Gemini, and Ollama with a one-line config switch
+- **Production-grade observability** — Prometheus metrics across all 7 services, Grafana dashboards with PromQL (request rate, error rate, p95 latency, service status), unified queries that work across Python `prometheus-fastapi-instrumentator` and Java Spring Boot Actuator metric formats
 - **190+ unit tests** across 7 services using pytest, JUnit 5, and Mockito
 
 ---

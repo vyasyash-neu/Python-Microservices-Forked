@@ -4,6 +4,7 @@ pydantic-settings
 httpx
 slowapi
 PyJWT[crypto]
+prometheus-fastapi-instrumentator
 
 # Testing
 pytest

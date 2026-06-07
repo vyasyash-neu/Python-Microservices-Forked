@@ -6,7 +6,7 @@ from app.database import engine, Base
 from app.routes.order_routes import router as order_router
 from app.kafka.producer import start_producer, stop_producer
 from app.services.outbox_worker import start_outbox_worker
-
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -43,6 +43,8 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 app.include_router(order_router, prefix="/api/orders", tags=["Orders"])
 

@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.routes.ai_routes import router as ai_router
 from app.kafka.consumer import start_consumer
+from prometheus_fastapi_instrumentator import Instrumentator
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
@@ -30,6 +31,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 app.include_router(ai_router, prefix="/api/ai", tags=["AI"])
 
